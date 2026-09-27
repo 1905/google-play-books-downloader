@@ -1,0 +1,12 @@
+.build/
+.venv/
+.DS_Store
+/screenshoter
+data/
+screenshots/
+plans/
+*.png
+!Resources/*.png
+!docs/*.png
+*.pdf
+*.dmg
