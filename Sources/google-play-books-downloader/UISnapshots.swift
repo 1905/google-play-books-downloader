@@ -238,16 +238,14 @@ private final class Snapshotter {
         let accSize = NSSize(width: 460, height: PDFSizeAccessory(pageBytes: 61_400_000).view.frame.height)
         try await renderBoth("pdf-size-accessory", size: accSize, titled: false, wait: 0.2) {
             let acc = PDFSizeAccessory(pageBytes: 61_400_000)
-            let box = NSView(frame: NSRect(origin: .zero, size: accSize))
-            box.wantsLayer = true
-            box.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            let box = FillView(frame: NSRect(origin: .zero, size: accSize))
             acc.view.frame.origin.x = (accSize.width - acc.view.frame.width) / 2
             box.addSubview(acc.view)
             return box
         }
 
         try writeDialogs()
-        print("ui-snapshots: \(count) PNG files in \(out.path)")
+        print("ui-snapshots: \(count) states, \(count * 2) PNG files + dialogs.txt in \(out.path)")
     }
 
     // MARK: State helpers
@@ -293,7 +291,7 @@ private final class Snapshotter {
         try await renderBoth(name, size: nil, titled: false, wait: 0.6) {
             let m = self.model()
             configure(m)
-            return Self.hosting(WindowListView(model: m) { _ in }
+            return Self.hosting(fit: true, WindowListView(model: m) { _ in }
                 .tint(Theme.accent)
                 .background(Color(nsColor: .windowBackgroundColor)))
         }
@@ -318,7 +316,8 @@ private final class Snapshotter {
             effect.state = .active
             effect.maskImage = Self.roundedMask(radius: 14)
             effect.appearance = NSAppearance(named: .darkAqua)
-            let host = NSHostingView(rootView: CaptureHUDView(model: m).tint(Theme.accent))
+            let host = NSHostingView(rootView: CaptureHUDView(model: m).tint(Theme.accent)
+                .environment(\.controlActiveState, .key))
             host.frame = effect.bounds
             host.autoresizingMask = [.width, .height]
             effect.addSubview(host)
@@ -328,9 +327,10 @@ private final class Snapshotter {
     }
 
     /// Hosting view the window sizes, like MainWindowController's (`sizingOptions = []`).
-    static func hosting<V: View>(_ view: V) -> NSView {
-        let host = NSHostingView(rootView: view)
-        host.sizingOptions = []
+    /// `fit`: keep the default sizing options, so `fittingSize` gives the content height.
+    static func hosting<V: View>(fit: Bool = false, _ view: V) -> NSView {
+        let host = NSHostingView(rootView: view.environment(\.controlActiveState, .key))
+        if !fit { host.sizingOptions = [] }
         return host
     }
 
@@ -364,7 +364,7 @@ private final class Snapshotter {
                 wait: Double, to url: URL) async throws {
         let appearance = NSAppearance(named: name)!
         let start = size ?? NSSize(width: view.frame.width > 0 ? view.frame.width : 400, height: 600)
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: start),
+        let window = SnapshotWindow(contentRect: NSRect(origin: .zero, size: start),
                               styleMask: titled ? [.titled, .closable, .miniaturizable, .resizable] : [.borderless],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -382,6 +382,7 @@ private final class Snapshotter {
         window.alphaValue = 0   // in the window list so SwiftUI tasks run, but never visible
         window.ignoresMouseEvents = true
         window.orderFrontRegardless()
+        window.makeKey()
         defer { window.orderOut(nil); window.close() }
 
         try await Task.sleep(for: .seconds(wait))
@@ -462,6 +463,23 @@ private final class Snapshotter {
     }
 }
 
+/// Draws as the key, main window of an active app (accent buttons, coloured traffic lights),
+/// although it is invisible and the app is in the background.
+private final class SnapshotWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+    override var isKeyWindow: Bool { true }
+    override var isMainWindow: Bool { true }
+}
+
+/// Window-background fill that follows the view's appearance (a layer colour would not).
+private final class FillView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        dirtyRect.fill()
+    }
+}
+
 private extension PermissionState {
     static let all = PermissionState(screen: .granted, accessibility: true)
 }
@@ -474,7 +492,7 @@ private final class MockData {
     let pages: [URL]
     let shortPages: Set<URL>
     let cacheDir: URL
-    let runDate = Date(timeIntervalSince1970: 1_763_302_500)   // 2025-11-16 14:15 UTC
+    let runDate = Date(timeIntervalSince1970: 1_794_809_700)   // 2026-11-16 06:15 UTC
     let sourceThumbnail: CGImage
     let otherThumbnail: CGImage
     let playBooksWindow: SourceWindow
