@@ -40,11 +40,20 @@ struct PermissionsCard: View {
         .help("Screen Recording and Accessibility are allowed. Click for details.")
     }
 
+    private var title: String {
+        let missing = (model.permissions.screen == .granted ? 0 : 1) + (model.permissions.accessibility ? 0 : 1)
+        switch missing {
+        case 0: return "Permissions"
+        case 1: return "Allow one more macOS permission"
+        default: return "Allow two macOS permissions"
+        }
+    }
+
     private var card: some View {
         Card(tint: model.permissions.allGranted ? nil : .orange) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    CardHeader(title: model.permissions.allGranted ? "Permissions" : "Allow two macOS permissions",
+                    CardHeader(title: title,
                                symbol: model.permissions.allGranted ? "checkmark.shield" : "exclamationmark.shield.fill")
                         .foregroundStyle(model.permissions.allGranted ? Color.primary : Color.orange)
                     Spacer()

@@ -5,21 +5,36 @@ import SwiftUI
 /// The ScrollView scrolls when the content is taller than the window.
 struct SetupView: View {
     @Bindable var model: AppModel
+    private static let optionsID = "options"
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                PermissionsCard(model: model)
-                SourceCard(model: model)
-                OptionsSection(model: model)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    PermissionsCard(model: model)
+                    SourceCard(model: model)
+                    OptionsSection(model: model)
+                        .id(Self.optionsID)
+                }
+                .frame(maxWidth: Theme.setupColumn)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, Theme.padding)
+                .padding(.top, 12)
+                .padding(.bottom, Theme.padding)
             }
-            .frame(maxWidth: Theme.setupColumn)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, Theme.padding)
-            .padding(.top, 12)
-            .padding(.bottom, Theme.padding)
+            .scrollBounceBehavior(.basedOnSize)
+            // Opened options are fully visible: scroll them into view.
+            .onChange(of: model.optionsExpanded) { _, open in
+                guard open else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(220))   // after the open animation
+                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(Self.optionsID, anchor: .bottom) }
+                }
+            }
+            .onAppear {
+                if model.optionsExpanded { proxy.scrollTo(Self.optionsID, anchor: .bottom) }
+            }
         }
-        .scrollBounceBehavior(.basedOnSize)
         .safeAreaInset(edge: .bottom, spacing: 0) { startBar }
     }
 

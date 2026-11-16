@@ -73,7 +73,10 @@ struct SourceCard: View {
 
     private func picked(_ s: SourceWindow) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            preview(s)
+            // Without Screen Recording there is nothing to preview: the row below names the window.
+            if model.permissions.screen == .granted || model.sourceHealth == .gone {
+                preview(s)
+            }
             HStack(alignment: .top, spacing: 12) {
                 AppIcon(image: s.appIcon, size: 40)
                 VStack(alignment: .leading, spacing: 3) {
@@ -144,7 +147,6 @@ struct SourceCard: View {
         }
         .aspectRatio(16 / 10, contentMode: .fit)
         .frame(maxHeight: 220)
-        .frame(maxWidth: .infinity)
         .overlay(alignment: .topTrailing) {
             if model.sourceHealth == .ok, model.sourceThumbnail != nil, model.permissions.screen == .granted {
                 Label("Live", systemImage: "dot.radiowaves.left.and.right")
@@ -152,10 +154,11 @@ struct SourceCard: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Capsule().fill(.ultraThinMaterial))
-                    .padding(8)
+                    .padding(14)
                     .help("Refreshed every 2 seconds")
             }
         }
+        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder

@@ -173,7 +173,8 @@ struct CaptureHUDView: View {
     /// The status line only when it adds something: "Saved page N" repeats the big counter.
     private var extraStatus: String? {
         let s = model.progress.status
-        return s.isEmpty || s.hasPrefix("Saved page") ? nil : s
+        if s.isEmpty || s.hasPrefix("Saved page") { return nil }
+        return s.hasPrefix("Waiting for the page") ? "Page settling…" : s
     }
 
     private func elapsed(at date: Date) -> String {

@@ -146,7 +146,7 @@ struct ReviewView: View {
                     }
                 }
                 .font(outcome.direction == nil ? .callout : .caption)
-                .foregroundStyle(outcome.direction == nil ? HierarchicalShapeStyle.secondary : .tertiary)
+                .foregroundStyle(.secondary)
                 if showDetails, let raw = outcome.raw {
                     Text(raw)
                         .font(.caption)
@@ -279,14 +279,13 @@ struct ReviewView: View {
             }
             .disabled(r.locked)
         } label: {
-            Image(systemName: "ellipsis.circle")
+            Image(systemName: "ellipsis")
                 .accessibilityLabel("More")
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
         .menuIndicator(.hidden)
         .fixedSize()
-        .padding(.horizontal, 6)
-        .help("More")
+        .help("More: select all, delete cached images")
         .confirmationDialog(trashQuestion(r), isPresented: $confirmTrash) {
             Button("Delete", role: .destructive) { model.trashCache() }
             Button("Cancel", role: .cancel) {}
