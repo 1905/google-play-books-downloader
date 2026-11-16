@@ -179,10 +179,10 @@ struct SourceCard: View {
         case .offScreen:
             HStack(spacing: 8) {
                 Image(systemName: "eye.slash")
+                // "Show" sits in the row above.
                 Text("The window is minimized or on another Space.")
                     .font(.callout)
                 Spacer()
-                Button("Show") { model.showSource() }
             }
             .foregroundStyle(.orange)
         }
