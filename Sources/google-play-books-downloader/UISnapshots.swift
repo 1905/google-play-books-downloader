@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import ImageIO
 import ScreenCaptureKit
@@ -64,27 +65,18 @@ private final class Snapshotter {
         await mock.warmThumbnails()
 
         // Setup screen (940 × 620, the window's setup size).
-        try await setup("setup-first-launch") { m in
-            m.runningFromTerminal = false
-        }
-        try await setup("setup-first-launch-terminal") { m in
-            m.runningFromTerminal = true
-        }
-        try await setup("setup-first-launch-min-size", size: Theme.setupMinSize) { m in
-            m.runningFromTerminal = false
-        }
+        try await setup("setup-first-launch") { _ in }
+        try await setup("setup-first-launch-terminal", terminal: true) { _ in }
+        try await setup("setup-first-launch-min-size", size: Theme.setupMinSize) { _ in }
         try await setup("setup-screen-relaunch") { m in
-            m.runningFromTerminal = false
             m.permissions = PermissionState(screen: .needsRelaunch, accessibility: false)
             m.screenRequested = true
         }
-        try await setup("setup-screen-relaunch-terminal") { m in
-            m.runningFromTerminal = true
+        try await setup("setup-screen-relaunch-terminal", terminal: true) { m in
             m.permissions = PermissionState(screen: .needsRelaunch, accessibility: true)
             m.screenRequested = true
         }
         try await setup("setup-accessibility-needed") { m in
-            m.runningFromTerminal = false
             m.permissions = PermissionState(screen: .granted, accessibility: false)
         }
         try await setup("setup-no-window") { m in
@@ -136,7 +128,6 @@ private final class Snapshotter {
             self.ready(m)
             m.permissions = PermissionState(screen: .needsRelaunch, accessibility: true)
             m.screenRequested = true
-            m.runningFromTerminal = false
         }
 
         // "Choose from list" / "Change" popover content (400 pt wide, height fits the content).
@@ -234,28 +225,28 @@ private final class Snapshotter {
         }
         try await review("review-capture-failed") { r in
             r = self.mock.review(Array(pages.prefix(9)),
-                                 .captureFailed("the page never turned — the key did not reach the window"))
+                                 .captureFailed("the page never turned — the key did not reach the window", .pageNeverTurned))
         }
-        // Every failure headline (RunOutcome.failure), with the messages the core and the
-        // key sender / capturer produce.
-        let failures: [(String, String)] = [
-            ("not-front", "turn page: the picked window (Safari) could not be brought to the front; keys would go to another app"),
-            ("accessibility-off", "turn page: Accessibility permission is off — the app cannot press keys"),
-            ("app-gone", "turn page: target app (pid 4242) is gone"),
-            ("window-closed", "the picked window was closed"),
-            ("window-hidden", "the picked window was minimized or moved to another Space"),
-            ("window-resized", "the picked window was resized (1280×800 → 1100×760 pt) — start a new capture"),
-            ("save-failed", "save failed: The file “0010.png” couldn’t be saved because the volume is out of space."),
-            ("unknown", "crop failed (0, 0, 0, 0)"),
+        // Every failure headline (RunOutcome, one per FailureKind), with the messages the core
+        // and the key sender / capturer produce.
+        let failures: [(String, String, FailureKind)] = [
+            ("not-front", "turn page: the picked window (Safari) could not be brought to the front; keys would go to another app", .notFrontmost),
+            ("accessibility-off", "turn page: Accessibility permission is off — the app cannot press keys", .accessibilityRevoked),
+            ("app-gone", "turn page: target app (pid 4242) is gone", .appGone),
+            ("window-closed", "the picked window was closed", .windowClosed),
+            ("window-hidden", "the picked window was minimized or moved to another Space", .windowOffScreen),
+            ("window-resized", "the picked window was resized (1280×800 → 1100×760 pt) — start a new capture", .windowResized),
+            ("save-failed", "save failed: The file “0010.png” couldn’t be saved because the volume is out of space.", .saveFailed),
+            ("unknown", "crop failed (0, 0, 0, 0)", .other),
         ]
-        for (name, message) in failures {
+        for (name, message, kind) in failures {
             try await review("review-failed-\(name)") { r in
-                r = self.mock.review(Array(pages.prefix(6)), .captureFailed(message))
+                r = self.mock.review(Array(pages.prefix(6)), .captureFailed(message, kind))
             }
         }
         try await review("review-min-size-failed", size: Theme.reviewMinSize) { r in
             r = self.mock.review(Array(pages.prefix(14)),
-                                 .captureFailed("turn page: the picked window (Safari) could not be brought to the front; keys would go to another app"))
+                                 .captureFailed("turn page: the picked window (Safari) could not be brought to the front; keys would go to another app", .notFrontmost))
             r.selection = Set(pages[2...4])
         }
         try await review("review-min-size-saved", size: Theme.reviewMinSize) { r in
@@ -265,7 +256,7 @@ private final class Snapshotter {
             r = self.mock.review(pages, .endOfDocument, name: "The Long Way Home")
         }
         try await review("review-zero-pages") { r in
-            r = self.mock.review([], .captureFailed("the page never turned — the key did not reach the window"))
+            r = self.mock.review([], .captureFailed("the page never turned — the key did not reach the window", .pageNeverTurned))
         }
         try await review("review-all-removed") { r in
             r = self.mock.review(Array(pages.prefix(5)), .cancelled)
@@ -301,12 +292,11 @@ private final class Snapshotter {
 
     // MARK: State helpers
 
-    func model() -> AppModel {
-        let m = AppModel()
+    func model(terminal: Bool = false) -> AppModel {
+        let m = AppModel(runningFromTerminal: terminal)
         m.stopPolling()
         m.permissions = PermissionState(screen: .needed, accessibility: false)
         m.screenRequested = false
-        m.runningFromTerminal = false
         return m
     }
 
@@ -317,9 +307,10 @@ private final class Snapshotter {
         m.sourceHealth = .ok
     }
 
-    func setup(_ name: String, size: NSSize = Theme.setupSize, _ configure: @escaping (AppModel) -> Void) async throws {
+    func setup(_ name: String, size: NSSize = Theme.setupSize, terminal: Bool = false,
+               _ configure: @escaping (AppModel) -> Void) async throws {
         try await renderBoth(name, size: size, titled: true, wait: 0.6) {
-            let m = self.model()
+            let m = self.model(terminal: terminal)
             configure(m)
             return Self.hosting(RootView(model: m))
         }
@@ -627,7 +618,7 @@ private final class MockData {
     func review(_ list: [URL], _ reason: StopReason, name: String? = nil) -> ReviewState {
         let dir = name.map { cacheDir.deletingLastPathComponent().appendingPathComponent($0) } ?? cacheDir
         var r = ReviewState(pages: list, reason: reason, cacheDir: dir,
-                            duration: Double(list.count) * 2.3 + 4)
+                            duration: Double(list.count) * 2.3 + 4, named: name != nil)
         r.incomplete = Set(list.filter { shortPages.contains($0) })
         return r
     }
@@ -823,3 +814,4 @@ private enum Art {
         guard CGImageDestinationFinalize(dest) else { throw CocoaError(.fileWriteUnknown) }
     }
 }
+#endif

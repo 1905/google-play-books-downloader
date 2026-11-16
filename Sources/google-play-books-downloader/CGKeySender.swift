@@ -3,8 +3,17 @@ import ApplicationServices
 import CoreGraphics
 import ScreenshoterCore
 
-enum KeySenderError: Error, CustomStringConvertible {
+enum KeySenderError: CaptureFailureKind, CustomStringConvertible {
     case appGone(pid_t), eventFailed, accessibilityRevoked, notFrontmost(String)
+
+    var failureKind: FailureKind {
+        switch self {
+        case .appGone: return .appGone
+        case .eventFailed: return .other
+        case .accessibilityRevoked: return .accessibilityRevoked
+        case .notFrontmost: return .notFrontmost
+        }
+    }
 
     var description: String {
         switch self {

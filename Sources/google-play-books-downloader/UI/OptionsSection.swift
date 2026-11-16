@@ -51,8 +51,7 @@ struct OptionsSection: View {
         var parts = [s.nextKey.displayName,
                      String(format: "%.1f s wait", s.extraLatency),
                      "max \(s.maxPages) pages"]
-        let name = model.runNameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !name.isEmpty { parts.append("“\(name)”") }
+        if let name = Settings.customRunName(from: model.runNameText) { parts.append("“\(name)”") }
         return parts.joined(separator: " · ")
     }
 

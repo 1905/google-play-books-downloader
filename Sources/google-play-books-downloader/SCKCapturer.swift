@@ -2,8 +2,16 @@ import CoreGraphics
 import ScreenCaptureKit
 import ScreenshoterCore
 
-enum CapturerError: Error, CustomStringConvertible {
+enum CapturerError: CaptureFailureKind, CustomStringConvertible {
     case windowClosed, windowOffScreen, windowResized(from: CGSize, to: CGSize)
+
+    var failureKind: FailureKind {
+        switch self {
+        case .windowClosed: return .windowClosed
+        case .windowOffScreen: return .windowOffScreen
+        case .windowResized: return .windowResized
+        }
+    }
 
     var description: String {
         switch self {

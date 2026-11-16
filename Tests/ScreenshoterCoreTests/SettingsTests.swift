@@ -101,13 +101,16 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(Settings.runName(from: "..", date: date), def)
         XCTAssertEqual(Settings.runName(from: " Action Comics 1 ", date: date), "Action Comics 1")
         XCTAssertEqual(Settings.runName(from: "a/b:c", date: date), "a-b-c")
+        XCTAssertNil(Settings.customRunName(from: "  "))
+        XCTAssertNil(Settings.customRunName(from: ".."))
+        XCTAssertEqual(Settings.customRunName(from: " a/b "), "a-b")
     }
 
     func testStopReasonHeader() {
         XCTAssertEqual(StopReason.endOfDocument.header(pageCount: 12), "12 pages — reached the end (page stopped changing)")
         XCTAssertEqual(StopReason.capReached.header(pageCount: 1), "1 page — hit the page cap")
         XCTAssertEqual(StopReason.cancelled.header(pageCount: 0), "0 pages — stopped with ESC")
-        XCTAssertEqual(StopReason.captureFailed("window gone").header(pageCount: 3), "3 pages — capture failed: window gone")
+        XCTAssertEqual(StopReason.captureFailed("window gone", .windowClosed).header(pageCount: 3), "3 pages — capture failed: window gone")
     }
 
     func testDurationWords() {

@@ -80,27 +80,21 @@ struct PermissionsCard: View {
             symbol: "rectangle.dashed.badge.record",
             name: "Screen Recording",
             reason: "To see the book window.",
-            pill: {
-                // The card already says what is missing: only the relaunch step gets a pill.
-                if state == .needsRelaunch {
-                    StatusPill(text: "Relaunch needed", color: .blue, symbol: "arrow.clockwise")
-                }
-            },
+            // The card already says what is missing: only the relaunch step gets a pill.
+            pill: state == .needsRelaunch
+                ? StatusPill(text: "Relaunch needed", color: .blue, symbol: "arrow.clockwise") : nil,
             actions: {
                 switch state {
                 case .granted:
                     GrantedCheck()
                 case .needsRelaunch:
-                    relaunchButton
-                    if model.runningFromTerminal {
-                        Button("Open Settings") { model.openSettings(.screenRecording) }   // the only button
-                    } else {
-                        settingsLink(.screenRecording)
-                    }
+                    // From a terminal there is no app to relaunch: Open Settings is the only button.
+                    if !model.runningFromTerminal { relaunchButton }
+                    settingsButton(.screenRecording, prominent: model.runningFromTerminal)
                 case .needed:
                     Button("Allow…") { model.requestScreenRecording() }
                         .buttonStyle(.borderedProminent)
-                    settingsLink(.screenRecording)
+                    settingsButton(.screenRecording)
                 }
             },
             detail: {
@@ -126,14 +120,13 @@ struct PermissionsCard: View {
             symbol: "accessibility",
             name: "Accessibility",
             reason: "To press the page-turn key.",
-            pill: { EmptyView() },
             actions: {
                 if granted {
                     GrantedCheck()
                 } else {
                     Button("Allow…") { model.requestAccessibility() }
                         .buttonStyle(.borderedProminent)
-                    settingsLink(.accessibility)
+                    settingsButton(.accessibility)
                 }
             },
             detail: {
@@ -144,23 +137,27 @@ struct PermissionsCard: View {
         )
     }
 
-    /// Secondary "Open Settings": text only, so each row has one button that reads as a button.
-    private func settingsLink(_ pane: AppModel.SettingsPane) -> some View {
-        Button("Open Settings") { model.openSettings(pane) }
-            .buttonStyle(.borderless)
-            .help("Open this pane in System Settings")
+    /// "Open Settings". Secondary (default): text only, so each row has one button that reads as
+    /// a button. `prominent`: a plain button, for a row where it is the only action.
+    @ViewBuilder
+    private func settingsButton(_ pane: AppModel.SettingsPane, prominent: Bool = false) -> some View {
+        let button = Button("Open Settings") { model.openSettings(pane) }
+        if prominent {
+            button
+        } else {
+            button
+                .buttonStyle(.borderless)
+                .help("Open this pane in System Settings")
+        }
     }
 
-    @ViewBuilder
     private var relaunchButton: some View {
-        if !model.runningFromTerminal {
-            Button {
-                model.relaunch()
-            } label: {
-                Label("Relaunch app", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.borderedProminent)
+        Button {
+            model.relaunch()
+        } label: {
+            Label("Relaunch app", systemImage: "arrow.clockwise")
         }
+        .buttonStyle(.borderedProminent)
     }
 
     @ViewBuilder
@@ -189,12 +186,12 @@ private struct GrantedCheck: View {
     }
 }
 
-/// One permission: icon, name + status pill, reason, optional detail line; buttons on the right.
-private struct PermissionRow<Pill: View, Actions: View, Detail: View>: View {
+/// One permission: icon, name + optional status pill, reason, optional detail line; buttons on the right.
+private struct PermissionRow<Actions: View, Detail: View>: View {
     let symbol: String
     let name: String
     let reason: String
-    @ViewBuilder let pill: Pill
+    var pill: StatusPill? = nil
     @ViewBuilder let actions: Actions
     @ViewBuilder let detail: Detail
 
@@ -208,7 +205,7 @@ private struct PermissionRow<Pill: View, Actions: View, Detail: View>: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(name).font(.body.weight(.semibold))
-                    pill
+                    if let pill { pill }
                 }
                 Text(reason)
                     .font(.callout)

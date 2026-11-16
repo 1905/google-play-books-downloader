@@ -68,7 +68,12 @@ struct ReviewState {
     /// Pages much shorter than the run's median page (see `PageCheck`), filled in after the run.
     var incomplete: Set<URL> = []
 
-    init(pages: [URL], reason: StopReason, cacheDir: URL, duration: TimeInterval) {
+    /// The run name when the user typed one (with any suffix `uniqueRunDirectory` added);
+    /// nil for the date-time default.
+    let customName: String?
+
+    /// `named`: the user typed the run name (else it is the date-time default).
+    init(pages: [URL], reason: StopReason, cacheDir: URL, duration: TimeInterval, named: Bool) {
         self.pages = pages
         var n: [URL: Int] = [:]
         for (i, u) in pages.enumerated() { n[u] = i + 1 }
@@ -76,13 +81,10 @@ struct ReviewState {
         self.reason = reason
         self.cacheDir = cacheDir
         self.duration = duration
+        customName = named ? cacheDir.lastPathComponent : nil
     }
 
     var runName: String { cacheDir.lastPathComponent }
-    /// The run name when the user typed one; nil for the date-time default (yyyy-MM-dd_HHmmss).
-    var customName: String? {
-        runName.range(of: #"^\d{4}-\d{2}-\d{2}_\d{6}$"#, options: .regularExpression) == nil ? runName : nil
-    }
     var locked: Bool { saving || cacheTrashed }
 }
 
@@ -116,7 +118,7 @@ final class AppModel {
     /// The permissions card is expanded although everything is granted.
     var permissionsExpanded = false
     /// No app bundle: macOS ties the grants to the terminal app that started the binary.
-    var runningFromTerminal = Bundle.main.bundleIdentifier == nil
+    let runningFromTerminal: Bool
 
     // MARK: Source window
 
@@ -149,8 +151,9 @@ final class AppModel {
     // MARK: Hooks set by AppDelegate / MainWindowController
 
     var onStageChange: ((Stage) -> Void)?
-    /// Starts a run on the window (already re-fetched by the caller).
-    var onStart: ((SCWindow, SessionConfig, NextKey, String) -> Void)?
+    /// Starts a run on the window (already re-fetched by the caller). The Bool: the user typed
+    /// the run name.
+    var onStart: ((SCWindow, SessionConfig, NextKey, String, Bool) -> Void)?
     var onStop: (() -> Void)?
     /// Called once when the running PDF export ends (saved or failed); AppDelegate sets it to
     /// finish a quit that waits for the export.
@@ -158,13 +161,16 @@ final class AppModel {
     /// Main window, for sheets and hiding it during the click picker.
     weak var window: NSWindow?
 
+    #if DEBUG
     /// `--ui-snapshots` only: replaces the ScreenCaptureKit window list.
     @ObservationIgnored var mockWindowList: (() async -> [SourceWindow])?
+    #endif
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     /// A Start is between the click and `onStart`: a second Return must not start a second run.
     @ObservationIgnored private var isStarting = false
 
-    init() {
+    init(runningFromTerminal: Bool = Bundle.main.bundleIdentifier == nil) {
+        self.runningFromTerminal = runningFromTerminal
         refreshPermissions()
     }
 
@@ -265,11 +271,13 @@ final class AppModel {
     }
 
     func loadWindowList() async {
+        #if DEBUG
         if let mockWindowList {
             windowList = await mockWindowList()
             windowListError = nil
             return
         }
+        #endif
         guard permissions.screen == .granted else {   // SCShareableContent can show the prompt
             windowList = []
             windowListError = "Allow Screen Recording to list windows."
@@ -373,7 +381,8 @@ final class AppModel {
         window?.makeFirstResponder(nil)
         guard !isStarting, stage == .setup, startBlocker == nil, let s = source else { return }
         isStarting = true
-        let runName = Settings.runName(from: runNameText, date: Date())
+        let customName = Settings.customRunName(from: runNameText)
+        let runName = customName ?? CachePaths.defaultRunName(date: Date())
         var current = settings
         current.splitSpreads = true   // Play Books two-page view; no UI switch any more
         current.save(to: .standard)   // what runs is what's stored
@@ -387,7 +396,7 @@ final class AppModel {
                 sourceHealth = .gone
                 return
             }
-            onStart?(fresh, config, key, runName)
+            onStart?(fresh, config, key, runName, customName != nil)
         }
     }
 
@@ -433,8 +442,9 @@ final class AppModel {
 
     // MARK: Review
 
-    func showReview(result: SessionResult, cacheDir: URL, duration: TimeInterval) {
-        review = ReviewState(pages: result.pages, reason: result.reason, cacheDir: cacheDir, duration: duration)
+    func showReview(result: SessionResult, cacheDir: URL, duration: TimeInterval, named: Bool) {
+        review = ReviewState(pages: result.pages, reason: result.reason, cacheDir: cacheDir,
+                             duration: duration, named: named)
         stage = .review
         let pages = result.pages
         Task {

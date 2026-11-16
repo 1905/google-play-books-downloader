@@ -12,8 +12,10 @@ public enum SpreadSplitter {
 
     /// [left, right], cut at `gutter(_:in:)`; falls back to `split(_:)` (center) when it finds
     /// none. `r` is in `image` coordinates. The right page starts at the gutter column.
-    public static func split(_ r: PixelRect, in image: GrayImage) -> [PixelRect] {
-        gutter(r, in: image).map { cut(r, at: $0) } ?? split(r)
+    /// `gutter`: a gutter was found (false = center fallback).
+    public static func split(_ r: PixelRect, in image: GrayImage) -> (rects: [PixelRect], gutter: Bool) {
+        guard let x = gutter(r, in: image) else { return (split(r), false) }
+        return (cut(r, at: x), true)
     }
 
     /// Gutter column (first column of the right page) in `image` within ±6% of r's width around
@@ -71,7 +73,7 @@ public enum SpreadSplitter {
     }
 
     /// [left, right], cut so the right page starts at column `x`.
-    static func cut(_ r: PixelRect, at x: Int) -> [PixelRect] {
+    private static func cut(_ r: PixelRect, at x: Int) -> [PixelRect] {
         let lw = x - r.x
         return [
             PixelRect(x: r.x, y: r.y, width: lw, height: r.height),

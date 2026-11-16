@@ -17,8 +17,20 @@ public protocol SessionClock: AnyObject {
     func sleep(_ seconds: Double) async throws
 }
 
+/// Why a capture failed, for the UI headline. The message stays for the details.
+public enum FailureKind: Equatable {
+    case pageNeverTurned, accessibilityRevoked, notFrontmost, appGone
+    case windowClosed, windowOffScreen, windowResized, saveFailed, other
+}
+
+/// An error a `PageTurner` or `WindowCapturer` throws that knows its `FailureKind`.
+/// Any other error is `.other`.
+public protocol CaptureFailureKind: Error {
+    var failureKind: FailureKind { get }
+}
+
 public enum StopReason: Equatable {
-    case endOfDocument, capReached, cancelled, captureFailed(String)
+    case endOfDocument, capReached, cancelled, captureFailed(String, FailureKind)
 }
 
 public struct SessionResult {
@@ -72,14 +84,16 @@ public final class CaptureSession {
     private var zone: PixelRect?          // preview coordinates
     private var previewWidth = 0, previewHeight = 0
     private var noChange = 0
-    /// Small gray thumb (≤ `thumbWidth` px wide) of the preview of every saved shot (per shot,
-    /// before split), in order. Wrap-check hashes come from these, so they follow zone changes.
-    private var shotThumbs: [GrayImage] = []
-    /// Wrap hash per entry of `shotThumbs`, valid for `wrapHashZone`; dropped when the zone changes.
+    /// Preview of the page on screen now: the last saved shot, or a held wrap candidate.
+    private var prevPreview = GrayImage(width: 0, height: 0) { didSet { prevRefCache = nil } }
+    private var prevRefCache: PageRef?
+    /// Every saved shot (per shot, before split), in order: a small gray thumb (≤ `thumbWidth`
+    /// px wide) of its preview and its near-blank flag at save time. Wrap-check hashes come from
+    /// the thumbs, so they follow zone changes; wrap confirmation uses the blank flag.
+    private var savedShots: [(thumb: GrayImage, blank: Bool)] = []
+    /// Wrap hash per entry of `savedShots`, valid for `wrapHashZone`; dropped when the zone changes.
     private var wrapHashes: [PageHash] = []
     private var wrapHashZone: PixelRect?
-    /// Near-blank flag per entry of `shotThumbs` (at save time). Wrap confirmation uses it.
-    private var shotBlanks: [Bool] = []
     /// A shot that matched earlier saved shot `match` (wrap candidate), not saved yet. The next
     /// shot confirms the wrap (it matches shot `match + 1`) or clears it (then this shot is saved
     /// first, so page order stays right). Saved at the end of the run if still held.
@@ -102,7 +116,7 @@ public final class CaptureSession {
     /// Zone growth > 2 blocks triggers a recompute.
     private let blockSize = PageZone.defaultBlockSize
 
-    private enum Stop: Error { case cancelled, failed(String) }
+    private enum Stop: Error { case cancelled, failed(String, FailureKind) }
 
     public init(config: SessionConfig, capturer: WindowCapturer, turner: PageTurner,
                 clock: SessionClock, sink: PageSink, log: @escaping (String) -> Void) {
@@ -134,10 +148,10 @@ public final class CaptureSession {
         shotAreas = []
         zone = nil
         noChange = 0
-        shotThumbs = []
+        prevRefCache = nil
+        savedShots = []
         wrapHashes = []
         wrapHashZone = nil
-        shotBlanks = []
         held = nil
         var full0: CGImage?
         var reason: StopReason
@@ -145,12 +159,12 @@ public final class CaptureSession {
             reason = try await loop(full0: &full0)
         } catch Stop.cancelled {
             reason = .cancelled
-        } catch Stop.failed(let msg) {
-            reason = .captureFailed(msg)
+        } catch Stop.failed(let msg, let kind) {
+            reason = .captureFailed(msg, kind)
         } catch is CancellationError {
             reason = .cancelled
         } catch {
-            reason = .captureFailed(String(describing: error))
+            reason = .captureFailed(String(describing: error), Self.kind(of: error))
         }
 
         // A wrap candidate still held was never confirmed, so it is a real page: the last one.
@@ -164,7 +178,7 @@ public final class CaptureSession {
         }
         // No key press ever changed the page: not an end of document.
         if reason == .endOfDocument, zone == nil {
-            reason = .captureFailed("the page never turned — the key did not reach the window")
+            reason = .captureFailed("the page never turned — the key did not reach the window", .pageNeverTurned)
         }
         log(reason == .capReached ? "\(reason.words) (\(config.maxPages))" : reason.words)
 
@@ -184,8 +198,7 @@ public final class CaptureSession {
         let full0 = try await captureFull()
         full0Out = full0
         (previewWidth, previewHeight) = config.previewSize(fullWidth: full0.width, fullHeight: full0.height)
-        // Preview of the page on screen now: the last saved shot, or a held wrap candidate.
-        var prevPreview = try await capturePreviewGray()
+        prevPreview = try await capturePreviewGray()
 
         while true {
             try checkCancel()
@@ -196,7 +209,7 @@ public final class CaptureSession {
             var changed = false
             while !changed {
                 try turn()
-                changed = try await waitForChange(from: prevPreview)
+                changed = try await waitForChange()
                 if !changed, noChangeHit("no change after key") { return .endOfDocument }
             }
             onStatus?("Waiting for the page to settle…")
@@ -226,7 +239,7 @@ public final class CaptureSession {
                 log("zone recomputed \(grown.scaled(by: d))")
             }
 
-            if !pageChanged(from: prevPreview, hash: hash(prevPreview), to: preview) {
+            if !pageChanged(from: prevRef, to: preview) {
                 if noChangeHit("shot matches last page, no change") { return .endOfDocument }
                 continue
             }
@@ -242,7 +255,7 @@ public final class CaptureSession {
                 let next = h.match + 1
                 let hashes = currentWrapHashes()
                 let confirmed = next < hashes.count
-                    && (shotHash.map { hashes[next].distance(to: $0) <= wrapDistance } ?? shotBlanks[next])
+                    && (shotHash.map { hashes[next].distance(to: $0) <= wrapDistance } ?? savedShots[next].blank)
                 if confirmed {
                     log("page matches page \(h.match + 1) — viewer wrapped, stopping")
                     return .endOfDocument
@@ -272,8 +285,7 @@ public final class CaptureSession {
     /// Saves a shot (`savePage`) and records its wrap-check thumb and blank flag.
     private func saveShot(_ s: Shot) throws {
         try savePage(s.full)
-        shotThumbs.append(s.thumb)
-        shotBlanks.append(s.blank)
+        savedShots.append((s.thumb, s.blank))
     }
 
     /// End-of-run save: on failure logs it and makes `reason` a `.captureFailed`, unless the run
@@ -283,12 +295,9 @@ public final class CaptureSession {
             try save()
         } catch {
             log("failed to save \(what): \(error)")
-            switch reason {
-            case .cancelled, .captureFailed: break
-            case .endOfDocument, .capReached:
-                if case .failed(let msg)? = error as? Stop { reason = .captureFailed(msg) }
-                else { reason = .captureFailed("save failed: \(error)") }
-            }
+            guard reason == .endOfDocument || reason == .capReached else { return }
+            if case .failed(let msg, let kind)? = error as? Stop { reason = .captureFailed(msg, kind) }
+            else { reason = .captureFailed("save failed: \(error)", .saveFailed) }
         }
     }
 
@@ -300,29 +309,53 @@ public final class CaptureSession {
         return noChange >= 2
     }
 
-    /// Polls until the preview differs from `base` (see `pageChanged`).
-    private func waitForChange(from base: GrayImage) async throws -> Bool {
-        let baseHash = hash(base)
+    /// Polls until the preview differs from `prevPreview` (see `pageChanged`).
+    private func waitForChange() async throws -> Bool {
+        let base = prevRef
         let start = clock.now()
         while true {
             try checkCancel()
             let p = try await capturePreviewGray()
-            if pageChanged(from: base, hash: baseHash, to: p) { return true }
+            if pageChanged(from: base, to: p) { return true }
             if clock.now() - start >= config.changeTimeout { return false }
             try await sleep(config.pollInterval)
         }
     }
 
-    /// True if `p` shows another page than `base` (`baseHash` = `hash(base)`): the zone hash
-    /// moved more than `matchDistance`, or, once the zone is known, any block inside the zone
-    /// changed (`PageZone.detect` with no minimum area: a block whose mean absolute difference
-    /// is > 8 gray levels). The hash alone is blind to sparse pages: two spreads that differ by
-    /// one short line measured only ~6 of 256 bits apart. Identical frames give no changed block.
-    private func pageChanged(from base: GrayImage, hash baseHash: PageHash, to p: GrayImage) -> Bool {
-        if hash(p).distance(to: baseHash) > config.matchDistance { return true }
-        guard let zone else { return false }
-        return PageZone.detect(before: base.cropped(zone), after: p.cropped(zone), blockSize: blockSize,
-                               minAreaFraction: 0) != nil
+    /// A preview to compare against: its zone hash and, once the zone is known, its zone crop.
+    /// Built once per base, so polls and the post-settle check do not hash or crop it again.
+    /// Valid for the zone it was built with.
+    private struct PageRef {
+        let hash: PageHash
+        let zone: PixelRect?
+        let crop: GrayImage?
+
+        init(_ preview: GrayImage, hash: PageHash, zone: PixelRect?) {
+            self.hash = hash
+            self.zone = zone
+            crop = zone.map { preview.cropped($0) }
+        }
+    }
+
+    /// True if `p` shows another page than `base`: the zone hash moved more than
+    /// `matchDistance`, or, once the zone is known, any block inside the zone changed
+    /// (`PageZone.detect` with no minimum area: a block whose mean absolute difference is > 8
+    /// gray levels). The hash alone is blind to sparse pages: two spreads that differ by one
+    /// short line measured only ~6 of 256 bits apart. Identical frames give no changed block.
+    private func pageChanged(from base: PageRef, to p: GrayImage) -> Bool {
+        if hash(p).distance(to: base.hash) > config.matchDistance { return true }
+        guard let zone = base.zone, let baseCrop = base.crop else { return false }
+        let crop = p.cropped(zone)
+        if crop.width == baseCrop.width, crop.height == baseCrop.height, crop.pixels == baseCrop.pixels { return false }
+        return PageZone.detect(before: baseCrop, after: crop, blockSize: blockSize, minAreaFraction: 0) != nil
+    }
+
+    /// `PageRef` of `prevPreview` for the current zone, built once and kept until either changes.
+    private var prevRef: PageRef {
+        if let r = prevRefCache, r.zone == zone { return r }
+        let r = PageRef(prevPreview, hash: hash(prevPreview), zone: zone)
+        prevRefCache = r
+        return r
     }
 
     /// Polls until `stablePolls` consecutive hashes are within `stableDistance`. Timeout only logs.
@@ -413,7 +446,7 @@ public final class CaptureSession {
             return
         }
         do {
-            guard let crop = last.full.cropping(to: last.rect.cgRect) else { throw Stop.failed("crop failed \(last.rect)") }
+            guard let crop = last.full.cropping(to: last.rect.cgRect) else { throw Stop.failed("crop failed \(last.rect)", .other) }
             let url = try sink.replaceLast(2, with: crop)
             saved.removeLast(2)
             saved.append(url)
@@ -436,26 +469,25 @@ public final class CaptureSession {
         let grayArea = PixelRect(x: area.x - 1, y: area.y - 1, width: area.width + 2, height: area.height + 2)
             .clamped(width: full.width, height: full.height)
         // Empty area: same failure the zero-size trim result used to hit below.
-        guard area.area > 0, let areaImage = full.cropping(to: grayArea.cgRect) else { throw Stop.failed("crop failed \(area)") }
-        guard let gray = GrayImage(cgImage: areaImage) else { throw Stop.failed("cannot read full shot") }
+        guard area.area > 0, let areaImage = full.cropping(to: grayArea.cgRect) else { throw Stop.failed("crop failed \(area)", .other) }
+        guard let gray = GrayImage(cgImage: areaImage) else { throw Stop.failed("cannot read full shot", .other) }
         // Segmentation and gutter search run in crop (gray) coordinates; shifted to full-shot coordinates after.
         let rect = PageZone.segment(gray, zone: PixelRect(x: area.x - grayArea.x, y: area.y - grayArea.y,
                                                           width: area.width, height: area.height))
         let split = config.splitSpreads && !saved.isEmpty && SpreadSplitter.isSpread(rect)
-        let gutter = split ? SpreadSplitter.gutter(rect, in: gray) : nil
-        let local: [PixelRect] = !split ? [rect] : gutter.map { SpreadSplitter.cut(rect, at: $0) } ?? SpreadSplitter.split(rect)
+        let (local, gutter) = split ? SpreadSplitter.split(rect, in: gray) : ([rect], false)
         let shift = { (r: PixelRect) in PixelRect(x: r.x + grayArea.x, y: r.y + grayArea.y, width: r.width, height: r.height) }
         let rects = local.map(shift)
-        recentShots = Array((recentShots + [(full, shift(rect), 0, gutter != nil)]).suffix(2))
+        recentShots = Array((recentShots + [(full, shift(rect), 0, gutter)]).suffix(2))
         shotAreas.append(rect.area)
         for r in rects {
             guard saved.count < config.maxPages else { return }
-            guard r.area > 0, let crop = full.cropping(to: r.cgRect) else { throw Stop.failed("crop failed \(r)") }
+            guard r.area > 0, let crop = full.cropping(to: r.cgRect) else { throw Stop.failed("crop failed \(r)", .other) }
             let url: URL
             do {
                 url = try sink.save(crop)
             } catch {
-                throw Stop.failed("save failed: \(error)")
+                throw Stop.failed("save failed: \(error)", .saveFailed)
             }
             saved.append(url)
             recentShots[recentShots.count - 1].files += 1
@@ -467,6 +499,10 @@ public final class CaptureSession {
     }
 
     // MARK: Helpers
+
+    private static func kind(of error: Error) -> FailureKind {
+        (error as? CaptureFailureKind)?.failureKind ?? .other
+    }
 
     private func hash(_ preview: GrayImage) -> PageHash {
         if let zone { return PageHash(preview.cropped(zone)) }
@@ -497,7 +533,7 @@ public final class CaptureSession {
             wrapHashes = []
             wrapHashZone = zone
         }
-        while wrapHashes.count < shotThumbs.count { wrapHashes.append(wrapHash(shotThumbs[wrapHashes.count])) }
+        while wrapHashes.count < savedShots.count { wrapHashes.append(wrapHash(savedShots[wrapHashes.count].thumb)) }
         return wrapHashes
     }
 
@@ -523,7 +559,7 @@ public final class CaptureSession {
         do {
             try turner.turnPage()
         } catch {
-            throw Stop.failed("turn page: \(error)")
+            throw Stop.failed("turn page: \(error)", Self.kind(of: error))
         }
         onStatus?("Turning page…")
     }
@@ -532,7 +568,7 @@ public final class CaptureSession {
         do {
             return try await capturer.captureFull()
         } catch {
-            throw Stop.failed(String(describing: error))
+            throw Stop.failed(String(describing: error), Self.kind(of: error))
         }
     }
 
@@ -542,7 +578,7 @@ public final class CaptureSession {
         do {
             img = try await capturer.capturePreview()
         } catch {
-            throw Stop.failed(String(describing: error))
+            throw Stop.failed(String(describing: error), Self.kind(of: error))
         }
         try checkCancel()
         let w = previewWidth, h = previewHeight
@@ -551,7 +587,7 @@ public final class CaptureSession {
            let g = GrayImage(cgImage: img, downscale: img.width / w), g.width == w, g.height == h {
             return g
         }
-        guard let g = GrayImage(cgImage: img) else { throw Stop.failed("cannot read preview") }
+        guard let g = GrayImage(cgImage: img) else { throw Stop.failed("cannot read preview", .other) }
         return g.resized(width: w, height: h)
     }
 }

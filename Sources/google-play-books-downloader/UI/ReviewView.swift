@@ -20,8 +20,8 @@ struct RunOutcome {
                       "flag.checkered.circle.fill", .orange)
         case .cancelled:
             self.init("Capture stopped", nil, "stop.circle.fill", .secondary)
-        case .captureFailed(let message):
-            let (title, direction) = Self.failure(message)
+        case .captureFailed(let message, let kind):
+            let (title, direction) = Self.failure(kind)
             self.init(title, direction, "exclamationmark.triangle.fill", .red, raw: message)
         }
     }
@@ -34,34 +34,28 @@ struct RunOutcome {
         self.raw = raw
     }
 
-    /// Maps the messages CaptureSession, KeySenderError and CapturerError produce.
-    static func failure(_ m: String) -> (String, String) {
-        func has(_ s: String) -> Bool { m.localizedCaseInsensitiveContains(s) }
-        if has("page never turned") {
+    /// Title and direction per failure kind.
+    private static func failure(_ kind: FailureKind) -> (String, String) {
+        switch kind {
+        case .pageNeverTurned:
             return ("The page never turned", "Keep the book window in front and try again.")
-        }
-        if has("could not be brought to the front") {
+        case .notFrontmost:
             return ("The book window did not come to the front", "Close any dialog over it and try again.")
-        }
-        if has("Accessibility permission is off") {
+        case .accessibilityRevoked:
             return ("Accessibility was turned off", "Allow it again, then start a new capture.")
-        }
-        if has("is gone") {
+        case .appGone:
             return ("The browser quit", "Open the book again and start a new capture.")
-        }
-        if has("window was closed") {
+        case .windowClosed:
             return ("The book window was closed", "Keep it open during the run.")
-        }
-        if has("minimized or moved to another Space") {
+        case .windowOffScreen:
             return ("The book window was hidden", "Keep it visible on this Space during the run.")
-        }
-        if has("window was resized") {
+        case .windowResized:
             return ("The book window changed size", "Keep its size during the run.")
-        }
-        if has("save failed") {
+        case .saveFailed:
             return ("Could not save a page", "Check the free disk space and try again.")
+        case .other:
+            return ("The capture stopped with an error", "Try again. If it happens again, see Details.")
         }
-        return ("The capture stopped with an error", "Try again. If it happens again, see Details.")
     }
 }
 
@@ -80,14 +74,15 @@ struct ReviewView: View {
 
     var body: some View {
         if let review = model.review {
+            let outcome = RunOutcome(review.reason)
             VStack(spacing: 0) {
-                header(review)
+                header(review, outcome)
                     .padding(.horizontal, Theme.padding)
                     .padding(.top, 6)
                     .padding(.bottom, 14)
                 Divider()
                 if review.pages.isEmpty {
-                    emptyState(review)
+                    emptyState(review, outcome)
                 } else {
                     grid(review)
                 }
@@ -103,9 +98,8 @@ struct ReviewView: View {
 
     // MARK: Header
 
-    private func header(_ r: ReviewState) -> some View {
-        let outcome = RunOutcome(r.reason)
-        return HStack(alignment: .center, spacing: 16) {
+    private func header(_ r: ReviewState, _ outcome: RunOutcome) -> some View {
+        HStack(alignment: .center, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: outcome.symbol)
                     .font(.system(size: 26))
@@ -134,7 +128,7 @@ struct ReviewView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if hasActions(r) {
+            if !r.pages.isEmpty || hasMoreMenu(r) {
                 actions(r)
                     .fixedSize()
             }
@@ -220,10 +214,6 @@ struct ReviewView: View {
     }
 
     // MARK: Run actions
-
-    private func hasActions(_ r: ReviewState) -> Bool {
-        !r.pages.isEmpty || hasMoreMenu(r)
-    }
 
     /// Nothing to delete for a run that never saved a page, or once the cache is gone.
     private func hasMoreMenu(_ r: ReviewState) -> Bool {
@@ -387,10 +377,10 @@ struct ReviewView: View {
         model.reviewScrollTarget = nil
     }
 
-    private func emptyState(_ r: ReviewState) -> some View {
+    private func emptyState(_ r: ReviewState, _ outcome: RunOutcome) -> some View {
         let neverSaved = r.captureNumbers.isEmpty
         // The header already gives a direction for failures: no second instruction here.
-        let headerDirects = RunOutcome(r.reason).direction != nil
+        let headerDirects = outcome.direction != nil
         return ContentUnavailableView {
             Label(neverSaved ? "No pages captured" : "No pages left", systemImage: "doc.questionmark")
         } description: {

@@ -44,8 +44,9 @@ final class FakeViewer: WindowCapturer, PageTurner {
     var wraps = false
     /// Pages drawn as a flat light page (no content).
     var blankPages: Set<Int> = []
-    /// The Nth `captureFull` call (1-based) throws.
+    /// The Nth `captureFull` call (1-based) throws `fullCaptureError`.
     var failOnFullCapture: Int?
+    var fullCaptureError: Error = Boom()
     /// Scrolling-viewer peek: a strip below the page showing the top of the next page.
     var peek: PixelRect?
     /// Page index → seconds a flat loading placeholder shows before the page renders.
@@ -111,7 +112,7 @@ final class FakeViewer: WindowCapturer, PageTurner {
     // WindowCapturer
     func captureFull() async throws -> CGImage {
         fullCount += 1
-        if fullCount == failOnFullCapture { throw Boom() }
+        if fullCount == failOnFullCapture { throw fullCaptureError }
         return TestImages.cgImage(from: FakeViewer.upscale(frame(consume: false)))
     }
 
@@ -565,7 +566,7 @@ final class CaptureSessionTests: XCTestCase {
         let viewer = FakeViewer(clock: clock, pages: 1)
         let result = await run(viewer)
         // No press ever changed the page: a failure (key not delivered), not an end of document.
-        XCTAssertEqual(result.reason, .captureFailed("the page never turned — the key did not reach the window"))
+        XCTAssertEqual(result.reason, .captureFailed("the page never turned — the key did not reach the window", .pageNeverTurned))
         XCTAssertEqual(result.pages.count, 1)
         XCTAssertEqual(viewer.turnCount, 2)
         XCTAssertNil(result.zone)
@@ -579,8 +580,34 @@ final class CaptureSessionTests: XCTestCase {
         let viewer = FakeViewer(clock: clock, pages: 5)
         viewer.failOnFullCapture = 3
         let result = await run(viewer)
-        guard case .captureFailed = result.reason else { return XCTFail("\(result.reason)") }
+        guard case .captureFailed(_, let kind) = result.reason else { return XCTFail("\(result.reason)") }
+        XCTAssertEqual(kind, .other, "an error without a FailureKind")
         assertPagesMatch(viewer, [0, 1])
+    }
+
+    struct KindError: CaptureFailureKind, CustomStringConvertible {
+        let failureKind: FailureKind
+        var description: String { "kind error" }
+    }
+
+    func testCaptureFailureKeepsErrorKind() async {
+        let viewer = FakeViewer(clock: clock, pages: 5)
+        viewer.failOnFullCapture = 3
+        viewer.fullCaptureError = KindError(failureKind: .windowResized)
+        let result = await run(viewer)
+        XCTAssertEqual(result.reason, .captureFailed("kind error", .windowResized))
+    }
+
+    func testTurnFailureKeepsErrorKind() async {
+        final class FailingTurner: PageTurner {
+            func turnPage() throws { throw KindError(failureKind: .notFrontmost) }
+        }
+        let viewer = FakeViewer(clock: clock, pages: 5)
+        let session = CaptureSession(config: SessionConfig(), capturer: viewer, turner: FailingTurner(), clock: clock,
+                                     sink: sink, log: { [unowned self] in self.logs.append($0) })
+        let result = await session.run()
+        XCTAssertEqual(result.reason, .captureFailed("turn page: kind error", .notFrontmost))
+        XCTAssertEqual(result.pages.count, 1, "the first shot is still saved")
     }
 
     func testCaptureFailureBeforeZoneKeepsFirstShot() async {
@@ -685,8 +712,8 @@ final class CaptureSessionTests: XCTestCase {
         for i in 1...3 {
             // The splitter on the full shot must agree with the session, which runs it on the crop.
             let page = FakeViewer.upscale(viewer.window(i))
-            let halves = SpreadSplitter.split(full, in: page)
-            XCTAssertNotEqual(halves, SpreadSplitter.split(full), "gutter not found")
+            let (halves, gutter) = SpreadSplitter.split(full, in: page)
+            XCTAssertTrue(gutter, "gutter not found")
             XCTAssertEqual(halves[1].x, 42 * FakeViewer.scale, accuracy: 4)
             XCTAssertTrue(got[2 * i - 1] == page.cropped(halves[0]), "left half of shot \(i)")
             XCTAssertTrue(got[2 * i] == page.cropped(halves[1]), "right half of shot \(i)")
@@ -818,7 +845,7 @@ final class CaptureSessionTests: XCTestCase {
         var replacedCalls = 0
         session.onPagesReplaced = { _ in replacedCalls += 1 }
         let result = await session.run()
-        XCTAssertEqual(result.reason, .captureFailed("the page never turned — the key did not reach the window"))
+        XCTAssertEqual(result.reason, .captureFailed("the page never turned — the key did not reach the window", .pageNeverTurned))
         XCTAssertEqual(result.pages.count, 1, "the first shot is still saved")
         XCTAssertNil(result.zone)
         XCTAssertEqual(viewer.turnCount, 2)
@@ -832,8 +859,9 @@ final class CaptureSessionTests: XCTestCase {
         let session = CaptureSession(config: SessionConfig(), capturer: viewer, turner: viewer, clock: clock,
                                      sink: ThrowingSink(), log: { [unowned self] in self.logs.append($0) })
         let result = await session.run()
-        guard case .captureFailed(let msg) = result.reason else { return XCTFail("\(result.reason)") }
+        guard case .captureFailed(let msg, let kind) = result.reason else { return XCTFail("\(result.reason)") }
         XCTAssertTrue(msg.hasPrefix("save failed"), msg)
+        XCTAssertEqual(kind, .saveFailed)
         XCTAssertEqual(result.pages, [])
     }
 
@@ -904,7 +932,7 @@ final class CaptureSessionTests: XCTestCase {
         let full = spread.scaled(by: FakeViewer.scale)
         let page = FakeViewer.upscale(last)
         XCTAssertEqual(SpreadSplitter.gutter(full, in: page), full.x + full.width / 2)
-        let halves = SpreadSplitter.split(full, in: page)
+        let halves = SpreadSplitter.split(full, in: page).rects
         let got = sink.grays
         guard got.count == 3 else { return }
         XCTAssertTrue(got[0] == viewer.expected(0, spread), "front cover")
