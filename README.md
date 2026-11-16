@@ -88,12 +88,12 @@ On macOS 15 and later, macOS can also ask once whether the app may "bypass the s
 1. In your browser, open the book in Google Play Books. Use the **two-page view** and go to the **cover**.
 2. Start **google-play-books-downloader**.
 3. Grant both permissions if the app asks for them.
-4. Under **Google Play Books window**, click **Choose from list** and select the browser window. Play Books windows are at the top of the list. The card shows a live preview of the window.
-5. Click **Test**. The book must turn one page. Then go back to the cover.
+4. Click **Choose from list** and select the browser window. Play Books windows are at the top of the list. The card shows a live preview of the window. To pick another window later, click **Change**.
+5. Click **Options**, then click **Test**. The book must turn one page. Then go back to the cover.
 6. Click **Start capture**. Do not use the mouse or the keyboard until the run ends. A small panel shows the page count. Press **ESC** or click **Stop** to stop early.
-7. In the review screen, select the pages you do not want and press ⌫. Double-click a page to see it in full size.
+7. In the review screen, select the pages you do not want and press ⌫. Double-click a page to see it in full size. Pages that look incomplete have an orange border. Click **N pages look incomplete** to select them.
 8. Press ⌘S, choose the PDF size and a file name, and click **Save**.
-9. Optional: click **Delete cached images** to remove the captured pages from the cache.
+9. Optional: click **⋯** > **Delete cached images…** to move the captured pages to the Trash.
 
 A 260-page book takes about 5 minutes.
 
@@ -142,7 +142,9 @@ All three sizes have the same page size in points. Only the resolution is differ
 - A landscape single page, such as a fold-out map, is split like a spread.
 - If a page stays blank or shows a loading icon for more than 6 seconds, it is kept as captured. Remove it in the review screen.
 - If Google Play Books needs more than 10 seconds to show the next page, the app presses the key again and can skip a page. The log shows this.
-- A page that repeats an earlier page exactly (other than blank pages) is taken as the start of the book again, and the run stops there.
+- When two pages in a row repeat two earlier pages (other than blank pages), the app takes this as the start of the book again, and the run stops there.
+- If the page-turn key cannot reach the book window (Accessibility is off, or another window stays in front), the run stops with an error. It does not report the end of the book.
+- If the book window is closed, hidden or resized during a run, the run stops with an error. The pages captured before that are kept.
 
 ## How it works
 
