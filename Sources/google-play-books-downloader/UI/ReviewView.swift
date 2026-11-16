@@ -1,11 +1,78 @@
 import ScreenshoterCore
 import SwiftUI
 
-/// Stage 3: check the pages, remove bad ones, save the PDF, clean the cache.
+/// Human headline for how a run ended: title, one direction line, the raw core message.
+struct RunOutcome {
+    let title: String
+    /// What to do about it; nil when the run ended normally.
+    let direction: String?
+    let symbol: String
+    let color: Color
+    /// Core / capturer message for failures, shown under "Details".
+    let raw: String?
+
+    init(_ reason: StopReason) {
+        switch reason {
+        case .endOfDocument:
+            self.init("Reached the end of the book", nil, "checkmark.circle.fill", .green)
+        case .capReached:
+            self.init("Stopped at the page limit", "The book may go on. Raise the limit in Options.",
+                      "flag.checkered.circle.fill", .orange)
+        case .cancelled:
+            self.init("Capture stopped", nil, "stop.circle.fill", .secondary)
+        case .captureFailed(let message):
+            let (title, direction) = Self.failure(message)
+            self.init(title, direction, "exclamationmark.triangle.fill", .red, raw: message)
+        }
+    }
+
+    private init(_ title: String, _ direction: String?, _ symbol: String, _ color: Color, raw: String? = nil) {
+        self.title = title
+        self.direction = direction
+        self.symbol = symbol
+        self.color = color
+        self.raw = raw
+    }
+
+    /// Maps the messages CaptureSession, KeySenderError and CapturerError produce.
+    static func failure(_ m: String) -> (String, String) {
+        func has(_ s: String) -> Bool { m.localizedCaseInsensitiveContains(s) }
+        if has("page never turned") {
+            return ("The page never turned", "Keep the book window in front and try again.")
+        }
+        if has("could not be brought to the front") {
+            return ("The book window did not come to the front", "Close any dialog over it and try again.")
+        }
+        if has("Accessibility permission is off") {
+            return ("Accessibility was turned off", "Allow it again, then start a new capture.")
+        }
+        if has("is gone") {
+            return ("The browser quit", "Open the book again and start a new capture.")
+        }
+        if has("window was closed") {
+            return ("The book window was closed", "Keep it open during the run.")
+        }
+        if has("minimized or moved to another Space") {
+            return ("The book window was hidden", "Keep it visible on this Space during the run.")
+        }
+        if has("window was resized") {
+            return ("The book window changed size", "Keep its size during the run.")
+        }
+        if has("save failed") {
+            return ("Could not save a page", "Check the free disk space and try again.")
+        }
+        return ("The capture stopped with an error", "Try again. If it happens again, see Details.")
+    }
+}
+
+/// Stage 3: check the pages, remove bad ones, save the PDF.
 struct ReviewView: View {
     @Bindable var model: AppModel
     @State private var viewer: PageRef?
     @State private var confirmTrash = false
+    @State private var showDetails = false
+    /// Page the grid scrolls to (set by the "look incomplete" button).
+    @State private var scrollTarget: URL?
 
     struct PageRef: Identifiable, Equatable {
         let url: URL
@@ -19,9 +86,11 @@ struct ReviewView: View {
                     .padding(.horizontal, Theme.padding)
                     .padding(.top, 6)
                     .padding(.bottom, 12)
-                toolbar(review)
-                    .padding(.horizontal, Theme.padding)
-                    .padding(.bottom, 12)
+                if hasToolbar(review) {
+                    toolbar(review)
+                        .padding(.horizontal, Theme.padding)
+                        .padding(.bottom, 12)
+                }
                 banner(review)
                 Divider()
                 if review.pages.isEmpty {
@@ -32,6 +101,7 @@ struct ReviewView: View {
             }
             .animation(.easeInOut(duration: 0.2), value: review.savedPDF)
             .animation(.easeInOut(duration: 0.2), value: review.cacheTrashed)
+            .animation(.easeInOut(duration: 0.15), value: review.selection.isEmpty)
             .sheet(item: $viewer) { ref in
                 PageViewer(model: model, start: ref.url)
             }
@@ -41,108 +111,102 @@ struct ReviewView: View {
     // MARK: Header
 
     private func header(_ r: ReviewState) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: reasonSymbol(r.reason))
+        let outcome = RunOutcome(r.reason)
+        return HStack(alignment: .top, spacing: 12) {
+            Image(systemName: outcome.symbol)
                 .font(.system(size: 26))
-                .foregroundStyle(reasonColor(r.reason))
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(r.pages.count) \(r.pages.count == 1 ? "page" : "pages")")
+                .foregroundStyle(outcome.color)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(outcome.title)
                     .font(.title2.weight(.bold))
-                    .contentTransition(.numericText())
-                Text(subtitle(r))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                     .lineLimit(2)
-                    .help(r.reason.words)
-            }
-            Spacer()
-            let incomplete = model.incompletePages.count
-            if incomplete > 0 && !r.locked {
-                Button {
-                    model.selectIncomplete()
-                } label: {
-                    Label("\(incomplete) \(incomplete == 1 ? "page looks" : "pages look") incomplete",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(Color.orange.opacity(0.14)))
-                        .overlay(Capsule().strokeBorder(Color.orange.opacity(0.4), lineWidth: 0.5))
-                        .contentShape(Capsule())
+                if let direction = outcome.direction {
+                    Text(direction)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .buttonStyle(.plain)
-                .help("Much shorter than the other pages. Click to select them, then press ⌫ to remove.")
-                .transition(.opacity)
+                HStack(spacing: 8) {
+                    Text(meta(r))
+                        .contentTransition(.numericText())
+                    if let raw = outcome.raw {
+                        Button {
+                            showDetails.toggle()
+                        } label: {
+                            HStack(spacing: 3) {
+                                Text("Details")
+                                Image(systemName: "chevron.down")
+                                    .imageScale(.small)
+                                    .rotationEffect(.degrees(showDetails ? 180 : 0))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.accent)
+                        .help(raw)
+                    }
+                }
+                .font(outcome.direction == nil ? .callout : .caption)
+                .foregroundStyle(outcome.direction == nil ? HierarchicalShapeStyle.secondary : .tertiary)
+                if showDetails, let raw = outcome.raw {
+                    Text(raw)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
             }
-            Text(r.runName)
-                .font(.caption.monospaced())
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(r.cacheDir.path)
+            Spacer(minLength: 0)
         }
+        .animation(.easeInOut(duration: 0.15), value: showDetails)
     }
 
-    private func subtitle(_ r: ReviewState) -> String {
-        var parts = [r.reason.words, Settings.durationWords(r.duration)]
-        let removed = r.captureNumbers.count - r.pages.count
-        if removed > 0 { parts.append("\(removed) removed") }
+    /// "“Name” · 64 pages · 2 min 31 s · 2 removed". The name only when the user typed one.
+    private func meta(_ r: ReviewState) -> String {
+        var parts: [String] = []
+        if let name = r.customName { parts.append("“\(name)”") }
+        let duration = Settings.durationWords(r.duration)
+        if r.captureNumbers.isEmpty {
+            parts.append("Stopped after \(duration)")
+        } else {
+            parts.append("\(r.pages.count) \(r.pages.count == 1 ? "page" : "pages")")
+            parts.append(duration)
+            let removed = r.captureNumbers.count - r.pages.count
+            if removed > 0 { parts.append("\(removed) removed") }
+        }
         return parts.joined(separator: " · ")
-    }
-
-    private func reasonSymbol(_ reason: StopReason) -> String {
-        switch reason {
-        case .endOfDocument: return "checkmark.circle.fill"
-        case .capReached: return "flag.checkered.circle.fill"
-        case .cancelled: return "stop.circle.fill"
-        case .captureFailed: return "exclamationmark.triangle.fill"
-        }
-    }
-
-    private func reasonColor(_ reason: StopReason) -> Color {
-        switch reason {
-        case .endOfDocument: return .green
-        case .capReached: return .orange
-        case .cancelled: return .secondary
-        case .captureFailed: return .red
-        }
     }
 
     // MARK: Toolbar
 
+    /// Nothing to show for a run that never saved a page.
+    private func hasToolbar(_ r: ReviewState) -> Bool {
+        !r.pages.isEmpty || hasMoreMenu(r)
+    }
+
+    private func hasMoreMenu(_ r: ReviewState) -> Bool {
+        !r.captureNumbers.isEmpty && !r.cacheTrashed
+    }
+
     private func toolbar(_ r: ReviewState) -> some View {
         HStack(spacing: 8) {
-            Button {
-                model.removeSelected()
-            } label: {
-                Label(r.selection.isEmpty ? "Remove" : "Remove \(r.selection.count)", systemImage: "trash")
+            if !r.selection.isEmpty {
+                Button {
+                    model.removeSelected()
+                } label: {
+                    Label("Remove \(r.selection.count) \(r.selection.count == 1 ? "page" : "pages")", systemImage: "trash")
+                }
+                .keyboardShortcut(.delete, modifiers: [])
+                .disabled(r.locked)
+                .help("Remove the selected pages from the PDF (⌫)")
+                .transition(.opacity)
             }
-            .keyboardShortcut(.delete, modifiers: [])
-            .disabled(r.selection.isEmpty || r.locked)
-            .help("Remove the selected pages from the PDF (⌫)")
-
-            Text(r.selection.isEmpty ? "Click to select · ⌘/⇧-click for more · double-click to enlarge" : "\(r.selection.count) selected")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.leading, 4)
+            incompleteButton(r)
 
             Spacer(minLength: 8)
 
-            Button("Delete cached images") {
-                // Without a saved PDF the images are the only copy of the run: ask first.
-                if r.savedPDF == nil { confirmTrash = true } else { model.trashCache() }
-            }
-            .disabled(r.locked)
-            .help("Move the captured images to the Trash")
-            .confirmationDialog(trashQuestion(r), isPresented: $confirmTrash) {
-                Button("Delete", role: .destructive) { model.trashCache() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("No PDF was saved from this run.")
-            }
-            if !model.headless {
+            if hasMoreMenu(r) { moreMenu(r) }
+            if !model.headless && !r.pages.isEmpty {
                 Button {
                     model.newCapture()
                 } label: {
@@ -150,23 +214,85 @@ struct ReviewView: View {
                 }
                 .disabled(r.saving)
             }
-            Button {
-                model.savePDF()
-            } label: {
-                if r.saving {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text("Saving…")
+            if !r.pages.isEmpty {
+                Button {
+                    model.savePDF()
+                } label: {
+                    if r.saving {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Saving…")
+                        }
+                    } else {
+                        Label("Save PDF…", systemImage: "square.and.arrow.down")
                     }
-                } else {
-                    Label("Save PDF…", systemImage: "square.and.arrow.down")
                 }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(r.locked)
             }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut("s", modifiers: .command)
-            .disabled(r.pages.isEmpty || r.locked)
         }
         .controlSize(.large)
+    }
+
+    @ViewBuilder
+    private func incompleteButton(_ r: ReviewState) -> some View {
+        let incomplete = model.incompletePages
+        if !incomplete.isEmpty && !r.locked {
+            Button {
+                model.selectIncomplete()
+                scrollTarget = incomplete.first
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text("\(incomplete.count) \(incomplete.count == 1 ? "page looks" : "pages look") incomplete")
+                    Image(systemName: "chevron.right")
+                        .imageScale(.small)
+                        .fontWeight(.semibold)
+                }
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(Color.orange.opacity(0.14)))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Much shorter than the other pages. Click to select them and show the first one.")
+            .transition(.opacity)
+        }
+    }
+
+    /// Rare actions: select all, select incomplete pages, delete the cached images.
+    private func moreMenu(_ r: ReviewState) -> some View {
+        Menu {
+            Button("Select all pages") { model.selectAll() }
+                .disabled(r.pages.isEmpty || r.locked)
+            if !model.incompletePages.isEmpty {
+                Button("Select incomplete pages") { model.selectIncomplete() }
+                    .disabled(r.locked)
+            }
+            Divider()
+            Button("Delete cached images…", role: .destructive) {
+                // Without a saved PDF the images are the only copy of the run: ask first.
+                if r.savedPDF == nil { confirmTrash = true } else { model.trashCache() }
+            }
+            .disabled(r.locked)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .accessibilityLabel("More")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.horizontal, 6)
+        .help("More")
+        .confirmationDialog(trashQuestion(r), isPresented: $confirmTrash) {
+            Button("Delete", role: .destructive) { model.trashCache() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("No PDF was saved from this run.")
+        }
     }
 
     private func trashQuestion(_ r: ReviewState) -> String {
@@ -179,111 +305,130 @@ struct ReviewView: View {
     @ViewBuilder
     private func banner(_ r: ReviewState) -> some View {
         if let pdf = r.savedPDF {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-                    .font(.title3)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Saved \(r.savedCount) \(r.savedCount == 1 ? "page" : "pages")"
-                         + (r.savedBytes.map { " · " + ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? ""))
-                        .font(.callout.weight(.semibold))
-                    Text(r.cacheTrashed ? "Cached images moved to the Trash." : (pdf.path as NSString).abbreviatingWithTildeInPath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer()
+                Text("Saved \(r.savedCount) \(r.savedCount == 1 ? "page" : "pages")"
+                     + (r.savedBytes.map { " · " + ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? ""))
+                    .font(.callout.weight(.semibold))
+                    .layoutPriority(1)
+                Text(r.cacheTrashed ? "Cached images moved to the Trash" : (pdf.path as NSString).abbreviatingWithTildeInPath)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
                 Button("Show in Finder") { model.showSavedInFinder() }
+                    .controlSize(.small)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.green.opacity(0.12)))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.green.opacity(0.35), lineWidth: 0.5))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.green.opacity(0.10)))
             .padding(.horizontal, Theme.padding)
             .padding(.bottom, 12)
             .transition(.move(edge: .top).combined(with: .opacity))
         } else if r.cacheTrashed {
-            HStack(spacing: 10) {
-                Image(systemName: "trash")
-                    .foregroundStyle(.secondary)
-                Text("Captured images moved to the Trash.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.05)))
-            .padding(.horizontal, Theme.padding)
-            .padding(.bottom, 12)
-            .transition(.move(edge: .top).combined(with: .opacity))
+            Label("Captured images moved to the Trash.", systemImage: "trash")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.05)))
+                .padding(.horizontal, Theme.padding)
+                .padding(.bottom, 12)
+                .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 
     // MARK: Grid
 
     private func grid(_ r: ReviewState) -> some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)], spacing: 18) {
-                ForEach(r.pages, id: \.self) { url in
-                    PageCell(url: url,
-                             number: r.captureNumbers[url] ?? 0,
-                             selected: r.selection.contains(url))
-                        .onTapGesture(count: 2) {
-                            if !r.cacheTrashed { viewer = PageRef(url: url) }
-                        }
-                        .simultaneousGesture(TapGesture().onEnded {
-                            let flags = NSEvent.modifierFlags
-                            model.click(url, command: flags.contains(.command), shift: flags.contains(.shift))
-                        })
-                        .transition(.scale(scale: 0.8).combined(with: .opacity))
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)], spacing: 18) {
+                    ForEach(r.pages, id: \.self) { url in
+                        PageCell(url: url,
+                                 number: r.captureNumbers[url] ?? 0,
+                                 selected: r.selection.contains(url),
+                                 incomplete: r.incomplete.contains(url))
+                            .onTapGesture(count: 2) {
+                                if !r.cacheTrashed { viewer = PageRef(url: url) }
+                            }
+                            .simultaneousGesture(TapGesture().onEnded {
+                                let flags = NSEvent.modifierFlags
+                                model.click(url, command: flags.contains(.command), shift: flags.contains(.shift))
+                            })
+                            .transition(.scale(scale: 0.8).combined(with: .opacity))
+                    }
                 }
+                .padding(Theme.padding)
+                .animation(.easeInOut(duration: 0.2), value: r.pages)
             }
-            .padding(Theme.padding)
-            .animation(.easeInOut(duration: 0.2), value: r.pages)
+            .onChange(of: scrollTarget) { _, target in
+                guard let target else { return }
+                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(target, anchor: .center) }
+                scrollTarget = nil
+            }
         }
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(Theme.pageSurface)
     }
 
     private func emptyState(_ r: ReviewState) -> some View {
-        ContentUnavailableView {
-            Label("No pages captured", systemImage: "doc.questionmark")
+        let neverSaved = r.captureNumbers.isEmpty
+        return ContentUnavailableView {
+            Label(neverSaved ? "No pages captured" : "No pages left", systemImage: "doc.questionmark")
         } description: {
-            Text(r.captureNumbers.isEmpty
-                 ? "The run ended before the first page was saved: \(r.reason.words)."
-                 : "You removed every page.")
+            if neverSaved {
+                Text("Open the book at the cover, then start a new capture.")
+            } else {
+                Text("You removed every page.")
+            }
         } actions: {
             if !model.headless {
                 Button("New capture") { model.newCapture() }
                     .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(Theme.pageSurface)
     }
 }
 
-/// One thumbnail with its capture-number badge and selection ring.
+/// One thumbnail with its capture number, selection ring and an orange mark when incomplete.
 private struct PageCell: View {
     let url: URL
     let number: Int
     let selected: Bool
+    let incomplete: Bool
     @State private var hover = false
 
     var body: some View {
         VStack(spacing: 6) {
             ThumbnailImage(url: url, maxPixel: 400)
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                .shadow(color: .black.opacity(hover ? 0.3 : 0.18), radius: hover ? 6 : 3, y: 1)
+                .overlay {
+                    if incomplete {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .strokeBorder(Color.orange, lineWidth: 2)
+                    }
+                }
+                .shadow(color: .black.opacity(hover ? 0.22 : 0.12), radius: hover ? 6 : 3, y: 1)
                 .frame(height: 190)
                 .frame(maxWidth: .infinity)
-            Text("\(number)")
-                .font(.caption.weight(.semibold).monospacedDigit())
-                .padding(.horizontal, 7)
-                .padding(.vertical, 1)
-                .foregroundStyle(selected ? Color.white : Color.secondary)
-                .background(Capsule().fill(selected ? Theme.accent : Color.clear))
+            HStack(spacing: 3) {
+                if incomplete {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .imageScale(.small)
+                }
+                Text("\(number)")
+            }
+            .font(.caption.weight(.medium).monospacedDigit())
+            .padding(.horizontal, 7)
+            .padding(.vertical, 1)
+            .foregroundStyle(selected ? Color.white : (incomplete ? Color.orange : Color.secondary))
+            .background(Capsule().fill(selected ? Theme.accent : Color.clear))
         }
         .padding(8)
         .background {
@@ -297,7 +442,7 @@ private struct PageCell: View {
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: selected)
-        .help("Capture \(number)")
+        .help(incomplete ? "Capture \(number) — looks incomplete (much shorter than the other pages)" : "Capture \(number)")
     }
 }
 
@@ -327,9 +472,12 @@ struct PageViewer: View {
                     .disabled(index >= pages.count - 1)
                 Text("Page \(index + 1) of \(pages.count)")
                     .font(.headline.monospacedDigit())
-                Text("capture \(model.review?.captureNumbers[current] ?? 0)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                // The capture number only when removals made it differ from the page number.
+                if let capture = model.review?.captureNumbers[current], capture != index + 1 {
+                    Text("Capture \(capture)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
                 Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -337,7 +485,7 @@ struct PageViewer: View {
             .padding(12)
             Divider()
             ZStack {
-                Color(nsColor: .underPageBackgroundColor)
+                Theme.pageSurface
                 if let image {
                     Image(nsImage: image)
                         .resizable()

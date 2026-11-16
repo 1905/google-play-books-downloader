@@ -79,6 +79,10 @@ struct ReviewState {
     }
 
     var runName: String { cacheDir.lastPathComponent }
+    /// The run name when the user typed one; nil for the date-time default (yyyy-MM-dd_HHmmss).
+    var customName: String? {
+        runName.range(of: #"^\d{4}-\d{2}-\d{2}_\d{6}$"#, options: .regularExpression) == nil ? runName : nil
+    }
     var locked: Bool { saving || cacheTrashed }
 }
 
@@ -122,6 +126,8 @@ final class AppModel {
     var windowList: [SourceWindow] = []
     var windowListError: String?
     var testKeyMessage: String?
+    /// The capture options under the window card are open.
+    var optionsExpanded = false
 
     // MARK: Capture / review
 
@@ -348,14 +354,14 @@ final class AppModel {
     var startBlocker: String? {
         switch permissions.screen {
         case .needed: return "Allow Screen Recording first."
-        case .needsRelaunch: return "Relaunch the app to use Screen Recording."
+        case .needsRelaunch: return "Relaunch to use Screen Recording."
         case .granted: break
         }
         if !permissions.accessibility { return "Allow Accessibility first." }
-        guard source != nil else { return "Choose the Google Play Books window first." }
+        guard source != nil else { return "Choose the Play Books window first." }
         switch sourceHealth {
-        case .gone: return "The window was closed. Choose it again."
-        case .offScreen: return "The window is minimized or on another Space. Show it first."
+        case .gone: return "Window closed. Choose it again."
+        case .offScreen: return "Window hidden. Show it first."
         case .ok: return nil
         }
     }

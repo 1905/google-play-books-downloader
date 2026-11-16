@@ -23,36 +23,42 @@ struct SourceCard: View {
     // MARK: Empty
 
     private var empty: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "macwindow.on.rectangle")
-                .font(.system(size: 30, weight: .light))
-                .foregroundStyle(Theme.accent)
+        let allowed = model.permissions.screen == .granted
+        return VStack(spacing: allowed ? 12 : 8) {
+            if allowed {
+                Image(systemName: "macwindow.on.rectangle")
+                    .font(.system(size: 30, weight: .light))
+                    .foregroundStyle(Theme.accent)
+            }
             VStack(spacing: 4) {
                 Text("Choose the Google Play Books window")
                     .font(.title3.weight(.semibold))
-                Text("Open the book in Google Play Books (browser), two-page view, at the cover.")
+                Text(allowed ? "Open the book in your browser, two-page view, at the cover."
+                             : "Allow Screen Recording first to choose a window.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 10) {
-                Button {
-                    model.pickByClick()
-                } label: {
-                    Label("Click a window…", systemImage: "cursorarrow.click")
+            if allowed {
+                HStack(spacing: 10) {
+                    Button {
+                        model.pickByClick()
+                    } label: {
+                        Label("Click a window…", systemImage: "cursorarrow.click")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button {
+                        showList = true
+                    } label: {
+                        Label("Choose from list", systemImage: "list.bullet")
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                listButton(title: "Choose from list", symbol: "list.bullet")
-            }
-            .disabled(model.permissions.screen != .granted)
-            if model.permissions.screen != .granted {
-                Label("Allow Screen Recording first to choose a window.", systemImage: "lock")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .modifier(WindowListPopover(model: model, isPresented: $showList))
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 18)
+        .padding(.vertical, allowed ? 18 : 14)
         .padding(.horizontal, 12)
         .background {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -62,19 +68,6 @@ struct SourceCard: View {
         }
     }
 
-    private func listButton(title: String, symbol: String) -> some View {
-        Button {
-            showList = true
-        } label: {
-            Label(title, systemImage: symbol)
-        }
-        .popover(isPresented: $showList, arrowEdge: .bottom) {
-            WindowListView(model: model) { candidate in
-                showList = false
-                model.pick(from: candidate)
-            }
-        }
-    }
 
     // MARK: Picked
 
@@ -95,22 +88,22 @@ struct SourceCard: View {
                         .lineLimit(2)
                         .truncationMode(.middle)
                         .help(s.title)
-                    Text("\(Int(s.frame.width.rounded())) × \(Int(s.frame.height.rounded())) pt")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.tertiary)
                 }
                 Spacer(minLength: 8)
                 HStack(spacing: 6) {
                     Button("Show") { model.showSource() }
                         .help("Bring the window to the front")
                         .disabled(model.sourceHealth == .gone)
-                    listButton(title: "Change", symbol: "arrow.triangle.2.circlepath")
-                        .labelStyle(.titleOnly)
-                        .help("Choose another window from the list")
-                    Button { model.pickByClick() } label: { Image(systemName: "cursorarrow.click") }
-                        .help("Click a different window")
+                    Menu("Change") {
+                        Button("Click a window…") { model.pickByClick() }
+                        Button("Choose from list…") { showList = true }
+                    }
+                    .menuIndicator(.visible)
+                    .fixedSize()
+                    .help("Choose a different window")
                 }
                 .fixedSize()
+                .modifier(WindowListPopover(model: model, isPresented: $showList))
             }
             healthBanner
         }
@@ -173,7 +166,7 @@ struct SourceCard: View {
         case .gone:
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                Text("Window closed — choose again.")
+                Text("Window closed.")
                     .font(.callout.weight(.medium))
                 Spacer()
                 Button("Choose again") { model.pickByClick() }
@@ -188,6 +181,21 @@ struct SourceCard: View {
                 Button("Show") { model.showSource() }
             }
             .foregroundStyle(.orange)
+        }
+    }
+}
+
+/// "Choose from list" popover, anchored to the view it modifies.
+private struct WindowListPopover: ViewModifier {
+    @Bindable var model: AppModel
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        content.popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            WindowListView(model: model) { candidate in
+                isPresented = false
+                model.pick(from: candidate)
+            }
         }
     }
 }

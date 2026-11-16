@@ -121,11 +121,13 @@ struct CaptureHUDView: View {
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Text(model.progress.status)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                if let status = extraStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
             Spacer(minLength: 0)
             VStack(spacing: 6) {
@@ -166,6 +168,12 @@ struct CaptureHUDView: View {
         }
         .frame(width: 76, height: 100)
         .animation(.easeOut(duration: 0.2), value: model.progress.lastPage)
+    }
+
+    /// The status line only when it adds something: "Saved page N" repeats the big counter.
+    private var extraStatus: String? {
+        let s = model.progress.status
+        return s.isEmpty || s.hasPrefix("Saved page") ? nil : s
     }
 
     private func elapsed(at date: Date) -> String {

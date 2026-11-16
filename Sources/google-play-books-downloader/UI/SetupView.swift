@@ -1,22 +1,20 @@
 import SwiftUI
 
-/// Stage 1, two columns: permissions + viewer window on the left, settings on the right,
-/// Start bar across the bottom. The ScrollView only scrolls when the window is made smaller
-/// than the content (e.g. while the permissions card is expanded).
+/// Stage 1, one centred column read top to bottom: permissions (loud only while one is
+/// missing), the book window (the hero), quiet capture options, Start bar across the bottom.
+/// The ScrollView scrolls when the content is taller than the window.
 struct SetupView: View {
     @Bindable var model: AppModel
 
     var body: some View {
         ScrollView {
-            HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 16) {
-                    PermissionsCard(model: model)
-                    SourceCard(model: model)
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                SettingsCard(model: model)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            VStack(alignment: .leading, spacing: 16) {
+                PermissionsCard(model: model)
+                SourceCard(model: model)
+                OptionsSection(model: model)
             }
+            .frame(maxWidth: Theme.setupColumn)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, Theme.padding)
             .padding(.top, 12)
             .padding(.bottom, Theme.padding)
@@ -29,22 +27,23 @@ struct SetupView: View {
         VStack(spacing: 0) {
             Divider()
             HStack(alignment: .center, spacing: 14) {
-                VStack(alignment: .leading, spacing: 3) {
+                Group {
                     if let blocker = model.startBlocker {
                         Label(blocker, systemImage: "info.circle")
                             .foregroundStyle(.secondary)
                     } else {
-                        Label("Ready. Leave the mouse and keyboard alone during the run.", systemImage: "checkmark.circle")
-                            .foregroundStyle(.green)
+                        HStack(spacing: 6) {
+                            Label("Ready — hands off the mouse and keyboard.", systemImage: "checkmark.circle")
+                                .foregroundStyle(.green)
+                            KeyCap(text: "ESC")
+                                .foregroundStyle(.secondary)
+                            Text("stops")
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    HStack(spacing: 4) {
-                        Text("Press")
-                        KeyCap(text: "ESC")
-                        Text("at any time to stop.")
-                    }
-                    .foregroundStyle(.tertiary)
                 }
                 .font(.callout)
+                .lineLimit(1)
                 .animation(.easeInOut(duration: 0.15), value: model.startBlocker)
                 Spacer(minLength: 8)
                 Button {

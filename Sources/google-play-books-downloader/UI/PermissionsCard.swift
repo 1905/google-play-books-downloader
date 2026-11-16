@@ -25,16 +25,15 @@ struct PermissionsCard: View {
             model.permissionsExpanded = true
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "checkmark.shield.fill")
+                Image(systemName: "checkmark.shield.fill").foregroundStyle(.green)
                 Text("Permissions OK")
-                Image(systemName: "chevron.down").imageScale(.small).foregroundStyle(.secondary)
+                Image(systemName: "chevron.down").imageScale(.small)
             }
-            .font(.callout.weight(.medium))
-            .foregroundStyle(.green)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(Color.green.opacity(0.12)))
-            .overlay(Capsule().strokeBorder(Color.green.opacity(0.35), lineWidth: 0.5))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color.primary.opacity(0.05)))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -45,7 +44,7 @@ struct PermissionsCard: View {
         Card(tint: model.permissions.allGranted ? nil : .orange) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    CardHeader(title: model.permissions.allGranted ? "Permissions" : "Permissions needed",
+                    CardHeader(title: model.permissions.allGranted ? "Permissions" : "Allow two macOS permissions",
                                symbol: model.permissions.allGranted ? "checkmark.shield" : "exclamationmark.shield.fill")
                         .foregroundStyle(model.permissions.allGranted ? Color.primary : Color.orange)
                     Spacer()
@@ -53,11 +52,6 @@ struct PermissionsCard: View {
                         Button("Hide") { model.permissionsExpanded = false }
                             .buttonStyle(.link)
                     }
-                }
-                if !model.permissions.allGranted {
-                    Text("The app needs two macOS permissions before it can capture.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
                 }
                 VStack(spacing: 0) {
                     screenRow
@@ -76,7 +70,7 @@ struct PermissionsCard: View {
         return PermissionRow(
             symbol: "rectangle.dashed.badge.record",
             name: "Screen Recording",
-            reason: "To see the Play Books window.",
+            reason: "To see the book window.",
             pill: {
                 switch state {
                 case .granted: StatusPill(text: "Granted", color: .green, symbol: "checkmark")
@@ -103,11 +97,11 @@ struct PermissionsCard: View {
                     EmptyView()
                 case .needsRelaunch:
                     Text(model.runningFromTerminal
-                         ? "Turn on your terminal app in System Settings, then quit it, open it again and restart google-play-books-downloader."
-                         : "Turn on \(AppInfo.name) in System Settings, then relaunch. macOS applies it only after a restart.")
+                         ? "Turn on your terminal app in System Settings, then restart the terminal and this tool."
+                         : "Turn on \(AppInfo.name) in System Settings, then relaunch.")
                 case .needed:
                     if model.runningFromTerminal {
-                        Text("Running from a terminal: grant it to your terminal app (Terminal, iTerm…) and restart it.")
+                        Text("Grant it to your terminal app, then restart the terminal.")
                     }
                 }
             }
@@ -119,7 +113,7 @@ struct PermissionsCard: View {
         return PermissionRow(
             symbol: "accessibility",
             name: "Accessibility",
-            reason: "To press the next-page key.",
+            reason: "To press the page-turn key.",
             pill: {
                 if granted {
                     StatusPill(text: "Granted", color: .green, symbol: "checkmark")
@@ -136,9 +130,7 @@ struct PermissionsCard: View {
             },
             detail: {
                 if !granted && model.runningFromTerminal {
-                    Text("Running from a terminal: grant it to your terminal app. It takes effect at once.")
-                } else if !granted {
-                    Text("Takes effect at once, no relaunch.")
+                    Text("Grant it to your terminal app.")
                 }
             }
         )
@@ -161,7 +153,7 @@ struct PermissionsCard: View {
         if #available(macOS 15, *), !model.permissions.allGranted {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "info.circle")
-                Text("macOS may also ask whether the app may bypass the private window picker. Click **Allow**, or the first key presses go to that dialog.")
+                Text("If macOS asks to bypass the private window picker, click **Allow**.")
                     .fixedSize(horizontal: false, vertical: true)
             }
             .font(.caption)
@@ -171,7 +163,7 @@ struct PermissionsCard: View {
     }
 }
 
-/// One permission: icon, name, reason, status pill, buttons, optional detail line.
+/// One permission: icon, name + status pill, reason, optional detail line; buttons on the right.
 private struct PermissionRow<Pill: View, Actions: View, Detail: View>: View {
     let symbol: String
     let name: String
@@ -187,22 +179,24 @@ private struct PermissionRow<Pill: View, Actions: View, Detail: View>: View {
                 .foregroundStyle(Theme.accent)
                 .frame(width: 34, height: 34)
                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.accent.opacity(0.12)))
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(name).font(.body.weight(.semibold))
                     pill
-                    Spacer(minLength: 0)
                 }
                 Text(reason)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                HStack(spacing: 8) { actions }
-                    .controlSize(.regular)
                 detail
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
             }
+            Spacer(minLength: 8)
+            HStack(spacing: 8) { actions }
+                .controlSize(.regular)
+                .fixedSize()
         }
     }
 }

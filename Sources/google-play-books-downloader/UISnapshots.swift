@@ -101,12 +101,19 @@ private final class Snapshotter {
         try await setup("setup-ready") { m in
             self.ready(m)
         }
+        try await setup("setup-options-expanded") { m in
+            self.ready(m)
+            m.optionsExpanded = true
+            m.runNameText = "The Long Way Home"
+        }
         try await setup("setup-test-key-sent") { m in
             self.ready(m)
+            m.optionsExpanded = true
             m.testKeyMessage = "Sent \(NextKey.pageDown.displayName). Did the page turn?"
         }
         try await setup("setup-test-key-failed") { m in
             self.ready(m)
+            m.optionsExpanded = true
             m.testKeyMessage = "Could not send the key: the picked window (Safari) could not be brought to the front; keys would go to another app"
         }
         try await setup("setup-other-app-window") { m in
@@ -162,6 +169,18 @@ private final class Snapshotter {
                                          startedAt: Date().addingTimeInterval(-83))
             m.lastPageThumb = self.mock.hudThumb(page)
         }
+        try await hud("hud-turning-page") { m in
+            let page = self.mock.pages[36]
+            m.progress = CaptureProgress(pageCount: 37, lastPage: page, status: "Turning page…",
+                                         startedAt: Date().addingTimeInterval(-84))
+            m.lastPageThumb = self.mock.hudThumb(page)
+        }
+        try await hud("hud-settling") { m in
+            let page = self.mock.pages[36]
+            m.progress = CaptureProgress(pageCount: 37, lastPage: page, status: "Waiting for the page to settle…",
+                                         startedAt: Date().addingTimeInterval(-85))
+            m.lastPageThumb = self.mock.hudThumb(page)
+        }
         try await hud("hud-stopping") { m in
             let page = self.mock.pages[51]
             m.progress = CaptureProgress(pageCount: 52, lastPage: page, status: "Stopping…",
@@ -213,6 +232,26 @@ private final class Snapshotter {
         try await review("review-capture-failed") { r in
             r = self.mock.review(Array(pages.prefix(9)),
                                  .captureFailed("the page never turned — the key did not reach the window"))
+        }
+        // Every failure headline (RunOutcome.failure), with the messages the core and the
+        // key sender / capturer produce.
+        let failures: [(String, String)] = [
+            ("not-front", "turn page: the picked window (Safari) could not be brought to the front; keys would go to another app"),
+            ("accessibility-off", "turn page: Accessibility permission is off — the app cannot press keys"),
+            ("app-gone", "turn page: target app (pid 4242) is gone"),
+            ("window-closed", "the picked window was closed"),
+            ("window-hidden", "the picked window was minimized or moved to another Space"),
+            ("window-resized", "the picked window was resized (1280×800 → 1100×760 pt) — start a new capture"),
+            ("save-failed", "save failed: The file “0010.png” couldn’t be saved because the volume is out of space."),
+            ("unknown", "crop failed (0, 0, 0, 0)"),
+        ]
+        for (name, message) in failures {
+            try await review("review-failed-\(name)") { r in
+                r = self.mock.review(Array(pages.prefix(6)), .captureFailed(message))
+            }
+        }
+        try await review("review-named-run") { r in
+            r = self.mock.review(pages, .endOfDocument, name: "The Long Way Home")
         }
         try await review("review-zero-pages") { r in
             r = self.mock.review([], .captureFailed("the page never turned — the key did not reach the window"))
@@ -450,7 +489,7 @@ private final class Snapshotter {
            Message: <localizedDescription>
            Buttons: OK
 
-        D6 Confirmation dialog (ReviewView "Delete cached images" with no PDF saved)
+        D6 Confirmation dialog (ReviewView ⋯ menu "Delete cached images…" with no PDF saved)
            Title:   Delete the \(n) captured pages?
            Message: No PDF was saved from this run.
            Buttons: Delete (destructive), Cancel
@@ -459,6 +498,9 @@ private final class Snapshotter {
         S1 NSSavePanel "Save PDF…" (name "<run name>.pdf", folder ~/Downloads, PDF size accessory = pdf-size-accessory PNG)
         S2 Click-a-window overlay (WindowPicker.PickerOverlay): every screen tinted systemBlue 8 %, crosshair cursor, ESC cancels
         S3 macOS Screen Recording / Accessibility / private-window-picker prompts (owned by macOS)
+        S4 Review ⋯ menu (NSMenu, not rendered): Select all pages · Select incomplete pages (only when some look
+           incomplete) · — · Delete cached images… (destructive). Hidden when the run saved no page or the cache is gone.
+        S5 Setup "Change" menu (NSMenu, not rendered): Click a window… · Choose from list… (opens the window-list popover)
         """
         try text.write(to: out.appendingPathComponent("dialogs.txt"), atomically: true, encoding: .utf8)
     }
@@ -566,8 +608,9 @@ private final class MockData {
 
     func hudThumb(_ url: URL) -> NSImage? { Thumbnails.cached(url, maxPixel: 240) }
 
-    func review(_ list: [URL], _ reason: StopReason) -> ReviewState {
-        var r = ReviewState(pages: list, reason: reason, cacheDir: cacheDir,
+    func review(_ list: [URL], _ reason: StopReason, name: String? = nil) -> ReviewState {
+        let dir = name.map { cacheDir.deletingLastPathComponent().appendingPathComponent($0) } ?? cacheDir
+        var r = ReviewState(pages: list, reason: reason, cacheDir: dir,
                             duration: Double(list.count) * 2.3 + 4)
         r.incomplete = Set(list.filter { shortPages.contains($0) })
         return r
