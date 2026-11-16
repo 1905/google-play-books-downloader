@@ -8,7 +8,6 @@ struct SourceCard: View {
     var body: some View {
         Card(tint: model.source != nil && model.sourceHealth == .gone ? .red : nil) {
             VStack(alignment: .leading, spacing: 14) {
-                CardHeader(title: "Google Play Books window", symbol: "macwindow")
                 if let source = model.source {
                     picked(source)
                 } else {
@@ -58,16 +57,8 @@ struct SourceCard: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, allowed ? 18 : 14)
-        .padding(.horizontal, 12)
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
-                .foregroundStyle(Theme.accent.opacity(0.45))
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.accent.opacity(0.04)))
-        }
+        .padding(.vertical, allowed ? 18 : 6)
     }
-
 
     // MARK: Picked
 
@@ -113,52 +104,42 @@ struct SourceCard: View {
         }
     }
 
-    /// Live 16:10 thumbnail; app icon + hint without Screen Recording; red when gone.
+    /// Live thumbnail straight in the card, with a soft corner radius and a "Live" badge.
+    /// Only shown with Screen Recording and while the window exists.
+    @ViewBuilder
     private func preview(_ s: SourceWindow) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Theme.pageSurface)
-            if model.sourceHealth == .gone {
-                VStack(spacing: 8) {
-                    Image(systemName: "xmark.rectangle")
-                        .font(.system(size: 30, weight: .light))
-                    Text("Window closed")
-                        .font(.headline)
-                }
-                .foregroundStyle(.red)
-            } else if let thumb = model.sourceThumbnail, model.permissions.screen == .granted {
+        Group {
+            if let thumb = model.sourceThumbnail {
                 Image(decorative: thumb, scale: 1)
                     .resizable()
                     .interpolation(.high)
                     .aspectRatio(contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
-                    .padding(10)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    }
+                    .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+                    .overlay(alignment: .topTrailing) {
+                        if model.sourceHealth == .ok {
+                            Label("Live", systemImage: "dot.radiowaves.left.and.right")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(.ultraThinMaterial))
+                                .padding(8)
+                                .help("Refreshed every 2 seconds")
+                        }
+                    }
                     .transition(.opacity)
-            } else if model.permissions.screen != .granted {
-                VStack(spacing: 10) {
-                    AppIcon(image: s.appIcon, size: 56)
-                    Text("Allow Screen Recording to see a preview")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
             } else {
-                ProgressView().controlSize(.small)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Theme.pageSurface)
+                    .aspectRatio(16 / 10, contentMode: .fit)
+                    .overlay(ProgressView().controlSize(.small))
             }
         }
-        .aspectRatio(16 / 10, contentMode: .fit)
-        .overlay(alignment: .topTrailing) {
-            if model.sourceHealth == .ok, model.sourceThumbnail != nil, model.permissions.screen == .granted {
-                Label("Live", systemImage: "dot.radiowaves.left.and.right")
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(.ultraThinMaterial))
-                    .padding(16)
-                    .help("Refreshed every 2 seconds")
-            }
-        }
-        .frame(maxHeight: 220)
+        .frame(maxHeight: 240)
         .frame(maxWidth: .infinity)
     }
 

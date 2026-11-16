@@ -101,6 +101,9 @@ private final class Snapshotter {
         try await setup("setup-ready") { m in
             self.ready(m)
         }
+        try await setup("setup-ready-min-size", size: Theme.setupMinSize) { m in
+            self.ready(m)
+        }
         try await setup("setup-options-expanded") { m in
             self.ready(m)
             m.optionsExpanded = true
@@ -198,7 +201,7 @@ private final class Snapshotter {
             r.selection = Set(pages[1...3])
             r.anchor = pages[1]
         }
-        try await review("review-incomplete-selected") { r in
+        try await review("review-incomplete-selected", scrollToIncomplete: true) { r in
             r = self.mock.review(pages, .endOfDocument)
             r.selection = r.incomplete
         }
@@ -249,6 +252,14 @@ private final class Snapshotter {
             try await review("review-failed-\(name)") { r in
                 r = self.mock.review(Array(pages.prefix(6)), .captureFailed(message))
             }
+        }
+        try await review("review-min-size-failed", size: Theme.reviewMinSize) { r in
+            r = self.mock.review(Array(pages.prefix(14)),
+                                 .captureFailed("turn page: the picked window (Safari) could not be brought to the front; keys would go to another app"))
+            r.selection = Set(pages[2...4])
+        }
+        try await review("review-min-size-saved", size: Theme.reviewMinSize) { r in
+            r = self.mock.saved(self.mock.review(pages, .endOfDocument, name: "The Long Way Home"))
         }
         try await review("review-named-run") { r in
             r = self.mock.review(pages, .endOfDocument, name: "The Long Way Home")
@@ -314,14 +325,19 @@ private final class Snapshotter {
         }
     }
 
-    func review(_ name: String, headless: Bool = false, _ configure: @escaping (inout ReviewState) -> Void) async throws {
-        try await renderBoth(name, size: Theme.reviewSize, titled: true, wait: 0.8) {
+    /// `scrollToIncomplete`: the grid starts scrolled to the first incomplete page, as after
+    /// "Select incomplete".
+    func review(_ name: String, headless: Bool = false, size: NSSize = Theme.reviewSize,
+                scrollToIncomplete: Bool = false,
+                _ configure: @escaping (inout ReviewState) -> Void) async throws {
+        try await renderBoth(name, size: size, titled: true, wait: 0.8) {
             let m = self.model()
             m.permissions = .all
             m.headless = headless
             var r = self.mock.review([], .endOfDocument)
             configure(&r)
             m.review = r
+            if scrollToIncomplete { m.reviewScrollTarget = r.pages.first { r.incomplete.contains($0) } }
             m.stage = .review
             return Self.hosting(RootView(model: m))
         }

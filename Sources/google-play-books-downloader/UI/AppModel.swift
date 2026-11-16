@@ -134,6 +134,8 @@ final class AppModel {
     var progress = CaptureProgress()
     var lastPageThumb: NSImage?
     var review: ReviewState?
+    /// Page the review grid scrolls to next (set by "Select incomplete"), cleared after the scroll.
+    var reviewScrollTarget: URL?
     var alert: AlertItem?
     /// `--autostart` review: no "New capture" (closing the window quits with the run's exit code).
     var headless = false
@@ -452,6 +454,7 @@ final class AppModel {
         guard !pages.isEmpty else { return }
         review?.selection = Set(pages)
         review?.anchor = pages.first
+        reviewScrollTarget = pages.first
     }
 
     /// Click on a page. ⌘ toggles, ⇧ extends from the anchor, plain click selects only it.

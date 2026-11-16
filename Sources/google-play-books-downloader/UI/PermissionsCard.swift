@@ -81,23 +81,26 @@ struct PermissionsCard: View {
             name: "Screen Recording",
             reason: "To see the book window.",
             pill: {
-                switch state {
-                case .granted: StatusPill(text: "Granted", color: .green, symbol: "checkmark")
-                case .needed: StatusPill(text: "Needed", color: .orange)
-                case .needsRelaunch: StatusPill(text: "Relaunch needed", color: .blue, symbol: "arrow.clockwise")
+                // The card already says what is missing: only the relaunch step gets a pill.
+                if state == .needsRelaunch {
+                    StatusPill(text: "Relaunch needed", color: .blue, symbol: "arrow.clockwise")
                 }
             },
             actions: {
                 switch state {
                 case .granted:
-                    EmptyView()
+                    GrantedCheck()
                 case .needsRelaunch:
                     relaunchButton
-                    Button("Open Settings") { model.openSettings(.screenRecording) }
+                    if model.runningFromTerminal {
+                        Button("Open Settings") { model.openSettings(.screenRecording) }   // the only button
+                    } else {
+                        settingsLink(.screenRecording)
+                    }
                 case .needed:
                     Button("Allow…") { model.requestScreenRecording() }
                         .buttonStyle(.borderedProminent)
-                    Button("Open Settings") { model.openSettings(.screenRecording) }
+                    settingsLink(.screenRecording)
                 }
             },
             detail: {
@@ -123,18 +126,14 @@ struct PermissionsCard: View {
             symbol: "accessibility",
             name: "Accessibility",
             reason: "To press the page-turn key.",
-            pill: {
-                if granted {
-                    StatusPill(text: "Granted", color: .green, symbol: "checkmark")
-                } else {
-                    StatusPill(text: "Needed", color: .orange)
-                }
-            },
+            pill: { EmptyView() },
             actions: {
-                if !granted {
+                if granted {
+                    GrantedCheck()
+                } else {
                     Button("Allow…") { model.requestAccessibility() }
                         .buttonStyle(.borderedProminent)
-                    Button("Open Settings") { model.openSettings(.accessibility) }
+                    settingsLink(.accessibility)
                 }
             },
             detail: {
@@ -143,6 +142,13 @@ struct PermissionsCard: View {
                 }
             }
         )
+    }
+
+    /// Secondary "Open Settings": text only, so each row has one button that reads as a button.
+    private func settingsLink(_ pane: AppModel.SettingsPane) -> some View {
+        Button("Open Settings") { model.openSettings(pane) }
+            .buttonStyle(.borderless)
+            .help("Open this pane in System Settings")
     }
 
     @ViewBuilder
@@ -169,6 +175,17 @@ struct PermissionsCard: View {
             .foregroundStyle(.secondary)
             .padding(.top, 2)
         }
+    }
+}
+
+/// Quiet mark for a granted permission, in place of the buttons.
+private struct GrantedCheck: View {
+    var body: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .font(.title3)
+            .foregroundStyle(.green)
+            .help("Allowed")
+            .accessibilityLabel("Allowed")
     }
 }
 

@@ -61,10 +61,13 @@ struct OptionsSection: View {
             model.optionsExpanded.toggle()
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "slider.horizontal.3")
-                Text(summary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                // While open, the controls show the same values: only the handle stays.
+                if !model.optionsExpanded {
+                    Image(systemName: "slider.horizontal.3")
+                    Text(summary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
                 Spacer(minLength: 8)
                 Text("Options")
                     .foregroundStyle(Theme.accent)

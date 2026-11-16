@@ -65,14 +65,13 @@ struct RunOutcome {
     }
 }
 
-/// Stage 3: check the pages, remove bad ones, save the PDF.
+/// Stage 3: check the pages, remove bad ones, save the PDF. Header: two bands — the outcome
+/// (title, direction, meta + page actions) on the left, the run actions on the right.
 struct ReviewView: View {
     @Bindable var model: AppModel
     @State private var viewer: PageRef?
     @State private var confirmTrash = false
     @State private var showDetails = false
-    /// Page the grid scrolls to (set by the "look incomplete" button).
-    @State private var scrollTarget: URL?
 
     struct PageRef: Identifiable, Equatable {
         let url: URL
@@ -85,13 +84,7 @@ struct ReviewView: View {
                 header(review)
                     .padding(.horizontal, Theme.padding)
                     .padding(.top, 6)
-                    .padding(.bottom, 12)
-                if hasToolbar(review) {
-                    toolbar(review)
-                        .padding(.horizontal, Theme.padding)
-                        .padding(.bottom, 12)
-                }
-                banner(review)
+                    .padding(.bottom, 14)
                 Divider()
                 if review.pages.isEmpty {
                     emptyState(review)
@@ -112,53 +105,91 @@ struct ReviewView: View {
 
     private func header(_ r: ReviewState) -> some View {
         let outcome = RunOutcome(r.reason)
-        return HStack(alignment: .top, spacing: 12) {
-            Image(systemName: outcome.symbol)
-                .font(.system(size: 26))
-                .foregroundStyle(outcome.color)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(outcome.title)
-                    .font(.title2.weight(.bold))
-                    .lineLimit(2)
-                if let direction = outcome.direction {
-                    Text(direction)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+        return HStack(alignment: .center, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: outcome.symbol)
+                    .font(.system(size: 26))
+                    .foregroundStyle(outcome.color)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(outcome.title)
+                        .font(.title2.weight(.bold))
+                        .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-                HStack(spacing: 8) {
-                    Text(meta(r))
-                        .contentTransition(.numericText())
-                    if let raw = outcome.raw {
-                        Button {
-                            showDetails.toggle()
-                        } label: {
-                            HStack(spacing: 3) {
-                                Text("Details")
-                                Image(systemName: "chevron.down")
-                                    .imageScale(.small)
-                                    .rotationEffect(.degrees(showDetails ? 180 : 0))
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Theme.accent)
-                        .help(raw)
+                    if let direction = outcome.direction {
+                        Text(direction)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    FlowRow(spacing: 10, lineSpacing: 6) {
+                        metaItems(r, outcome)
+                    }
+                    if showDetails, let raw = outcome.raw {
+                        Text(raw)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .font(outcome.direction == nil ? .callout : .caption)
-                .foregroundStyle(.secondary)
-                if showDetails, let raw = outcome.raw {
-                    Text(raw)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 2)
-                }
             }
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if hasActions(r) {
+                actions(r)
+                    .fixedSize()
+            }
         }
         .animation(.easeInOut(duration: 0.15), value: showDetails)
+    }
+
+    /// Second band: what was captured (or where it was saved), then the page actions.
+    @ViewBuilder
+    private func metaItems(_ r: ReviewState, _ outcome: RunOutcome) -> some View {
+        if let pdf = r.savedPDF {
+            Text(savedLine(r, pdf))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(pdf.path)
+            Button("Show in Finder") { model.showSavedInFinder() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        } else {
+            Text(meta(r))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .contentTransition(.numericText())
+        }
+        if let raw = outcome.raw {
+            Button {
+                showDetails.toggle()
+            } label: {
+                HStack(spacing: 3) {
+                    Text("Details")
+                    Image(systemName: "chevron.down")
+                        .imageScale(.small)
+                        .rotationEffect(.degrees(showDetails ? 180 : 0))
+                }
+                .font(.callout)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.accent)
+            .help(raw)
+        }
+        if !r.selection.isEmpty {
+            Button {
+                model.removeSelected()
+            } label: {
+                Label("Remove \(r.selection.count) \(r.selection.count == 1 ? "page" : "pages")", systemImage: "trash")
+            }
+            .controlSize(.small)
+            .keyboardShortcut(.delete, modifiers: [])
+            .disabled(r.locked)
+            .help("Remove the selected pages from the PDF (⌫)")
+        }
+        incompleteButton(r)
     }
 
     /// "“Name” · 64 pages · 2 min 31 s · 2 removed". The name only when the user typed one.
@@ -174,37 +205,31 @@ struct ReviewView: View {
             let removed = r.captureNumbers.count - r.pages.count
             if removed > 0 { parts.append("\(removed) removed") }
         }
+        if r.cacheTrashed { parts.append("images in the Trash") }
         return parts.joined(separator: " · ")
     }
 
-    // MARK: Toolbar
+    /// "Saved to ~/Downloads/x.pdf · 38.7 MB · images in the Trash".
+    private func savedLine(_ r: ReviewState, _ pdf: URL) -> String {
+        var parts = ["Saved to " + (pdf.path as NSString).abbreviatingWithTildeInPath]
+        if let bytes = r.savedBytes { parts.append(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) }
+        if r.cacheTrashed { parts.append("images in the Trash") }
+        return parts.joined(separator: " · ")
+    }
 
-    /// Nothing to show for a run that never saved a page.
-    private func hasToolbar(_ r: ReviewState) -> Bool {
+    // MARK: Run actions
+
+    private func hasActions(_ r: ReviewState) -> Bool {
         !r.pages.isEmpty || hasMoreMenu(r)
     }
 
+    /// Nothing to delete for a run that never saved a page, or once the cache is gone.
     private func hasMoreMenu(_ r: ReviewState) -> Bool {
         !r.captureNumbers.isEmpty && !r.cacheTrashed
     }
 
-    private func toolbar(_ r: ReviewState) -> some View {
+    private func actions(_ r: ReviewState) -> some View {
         HStack(spacing: 8) {
-            if !r.selection.isEmpty {
-                Button {
-                    model.removeSelected()
-                } label: {
-                    Label("Remove \(r.selection.count) \(r.selection.count == 1 ? "page" : "pages")", systemImage: "trash")
-                }
-                .keyboardShortcut(.delete, modifiers: [])
-                .disabled(r.locked)
-                .help("Remove the selected pages from the PDF (⌫)")
-                .transition(.opacity)
-            }
-            incompleteButton(r)
-
-            Spacer(minLength: 8)
-
             if hasMoreMenu(r) { moreMenu(r) }
             if !model.headless && !r.pages.isEmpty {
                 Button {
@@ -215,24 +240,36 @@ struct ReviewView: View {
                 .disabled(r.saving)
             }
             if !r.pages.isEmpty {
-                Button {
-                    model.savePDF()
-                } label: {
-                    if r.saving {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Saving…")
-                        }
-                    } else {
-                        Label("Save PDF…", systemImage: "square.and.arrow.down")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(r.locked)
+                saveButton(r)
             }
         }
         .controlSize(.large)
+    }
+
+    /// Primary until a PDF exists; then "Save again…" steps back and Show in Finder leads.
+    @ViewBuilder
+    private func saveButton(_ r: ReviewState) -> some View {
+        let button = Button {
+            model.savePDF()
+        } label: {
+            if r.saving {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Saving…")
+                }
+            } else if r.savedPDF != nil {
+                Label("Save again…", systemImage: "square.and.arrow.down")
+            } else {
+                Label("Save PDF…", systemImage: "square.and.arrow.down")
+            }
+        }
+        .keyboardShortcut("s", modifiers: .command)
+        .disabled(r.locked)
+        if r.savedPDF == nil {
+            button.buttonStyle(.borderedProminent)
+        } else {
+            button
+        }
     }
 
     @ViewBuilder
@@ -241,7 +278,6 @@ struct ReviewView: View {
         if !incomplete.isEmpty && !r.locked {
             Button {
                 model.selectIncomplete()
-                scrollTarget = incomplete.first
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -252,8 +288,8 @@ struct ReviewView: View {
                 }
                 .font(.callout.weight(.medium))
                 .foregroundStyle(.orange)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
                 .background(Capsule().fill(Color.orange.opacity(0.14)))
                 .contentShape(Capsule())
             }
@@ -279,13 +315,17 @@ struct ReviewView: View {
             }
             .disabled(r.locked)
         } label: {
-            Image(systemName: "ellipsis")
-                .accessibilityLabel("More")
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 17))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
         }
-        .menuStyle(.button)
+        .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("More: select all, delete cached images")
+        .help("More")
+        .accessibilityLabel("More")
         .confirmationDialog(trashQuestion(r), isPresented: $confirmTrash) {
             Button("Delete", role: .destructive) { model.trashCache() }
             Button("Cancel", role: .cancel) {}
@@ -297,47 +337,6 @@ struct ReviewView: View {
     private func trashQuestion(_ r: ReviewState) -> String {
         let n = r.captureNumbers.count
         return "Delete the \(n) captured \(n == 1 ? "page" : "pages")?"
-    }
-
-    // MARK: Banner
-
-    @ViewBuilder
-    private func banner(_ r: ReviewState) -> some View {
-        if let pdf = r.savedPDF {
-            HStack(spacing: 8) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Text("Saved \(r.savedCount) \(r.savedCount == 1 ? "page" : "pages")"
-                     + (r.savedBytes.map { " · " + ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? ""))
-                    .font(.callout.weight(.semibold))
-                    .layoutPriority(1)
-                Text(r.cacheTrashed ? "Cached images moved to the Trash" : (pdf.path as NSString).abbreviatingWithTildeInPath)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 8)
-                Button("Show in Finder") { model.showSavedInFinder() }
-                    .controlSize(.small)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.green.opacity(0.10)))
-            .padding(.horizontal, Theme.padding)
-            .padding(.bottom, 12)
-            .transition(.move(edge: .top).combined(with: .opacity))
-        } else if r.cacheTrashed {
-            Label("Captured images moved to the Trash.", systemImage: "trash")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.05)))
-                .padding(.horizontal, Theme.padding)
-                .padding(.bottom, 12)
-                .transition(.move(edge: .top).combined(with: .opacity))
-        }
     }
 
     // MARK: Grid
@@ -364,24 +363,39 @@ struct ReviewView: View {
                 .padding(Theme.padding)
                 .animation(.easeInOut(duration: 0.2), value: r.pages)
             }
-            .onChange(of: scrollTarget) { _, target in
-                guard let target else { return }
-                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(target, anchor: .center) }
-                scrollTarget = nil
+            .onChange(of: model.reviewScrollTarget) { _, target in
+                scroll(proxy, to: target, animated: true)
+            }
+            .task {
+                // A target set before the grid appeared (e.g. a snapshot state).
+                try? await Task.sleep(for: .milliseconds(50))
+                scroll(proxy, to: model.reviewScrollTarget, animated: false)
             }
         }
         .background(Theme.pageSurface)
     }
 
+    private func scroll(_ proxy: ScrollViewProxy, to target: URL?, animated: Bool) {
+        guard let target else { return }
+        if animated {
+            withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(target, anchor: .center) }
+        } else {
+            proxy.scrollTo(target, anchor: .center)
+        }
+        model.reviewScrollTarget = nil
+    }
+
     private func emptyState(_ r: ReviewState) -> some View {
         let neverSaved = r.captureNumbers.isEmpty
+        // The header already gives a direction for failures: no second instruction here.
+        let headerDirects = RunOutcome(r.reason).direction != nil
         return ContentUnavailableView {
             Label(neverSaved ? "No pages captured" : "No pages left", systemImage: "doc.questionmark")
         } description: {
-            if neverSaved {
-                Text("Open the book at the cover, then start a new capture.")
-            } else {
+            if !neverSaved {
                 Text("You removed every page.")
+            } else if !headerDirects {
+                Text("Open the book at the cover, then start a new capture.")
             }
         } actions: {
             if !model.headless {
@@ -395,7 +409,59 @@ struct ReviewView: View {
     }
 }
 
-/// One thumbnail with its capture number, selection ring and an orange mark when incomplete.
+/// Left-aligned row that wraps to more lines when the items do not fit. Items wider than the
+/// row get the row width (so a long path truncates instead of overflowing).
+struct FlowRow: Layout {
+    var spacing: CGFloat = 8
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + lineSpacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: proposal.width.map { min($0, width) } ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for item in row.items {
+                let size = item.size
+                subviews[item.index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
+                                           proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + lineSpacing
+        }
+    }
+
+    private struct Item { let index: Int; let size: CGSize }
+    private struct Row { var items: [Item] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
+
+    private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+        for (i, view) in subviews.enumerated() {
+            var size = view.sizeThatFits(.unspecified)
+            if size.width > width { size = view.sizeThatFits(ProposedViewSize(width: width, height: nil)) }
+            if size.width <= 0 && size.height <= 0 { continue }
+            let needed = row.items.isEmpty ? size.width : row.width + spacing + size.width
+            if needed > width && !row.items.isEmpty {
+                rows.append(row)
+                row = Row()
+            }
+            row.width = row.items.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.items.append(Item(index: i, size: size))
+        }
+        if !row.items.isEmpty { rows.append(row) }
+        return rows
+    }
+}
+
+/// One thumbnail with its capture number. Selected: an accent ring around the page with a
+/// small gap. Incomplete: a thin orange border and ⚠ by the number.
 private struct PageCell: View {
     let url: URL
     let number: Int
@@ -404,16 +470,23 @@ private struct PageCell: View {
     @State private var hover = false
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             ThumbnailImage(url: url, maxPixel: 400)
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .overlay {
                     if incomplete {
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .strokeBorder(Color.orange, lineWidth: 2)
+                            .strokeBorder(Color.orange, lineWidth: 1.5)
                     }
                 }
                 .shadow(color: .black.opacity(hover ? 0.22 : 0.12), radius: hover ? 6 : 3, y: 1)
+                .overlay {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Theme.accent, lineWidth: 3)
+                            .padding(-6)   // 3 pt gap + 3 pt ring
+                    }
+                }
                 .frame(height: 190)
                 .frame(maxWidth: .infinity)
             HStack(spacing: 3) {
@@ -430,14 +503,6 @@ private struct PageCell: View {
             .background(Capsule().fill(selected ? Theme.accent : Color.clear))
         }
         .padding(8)
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(selected ? Theme.accent.opacity(0.16) : (hover ? Color.primary.opacity(0.05) : .clear))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Theme.accent, lineWidth: selected ? 2.5 : 0)
-        }
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: selected)
