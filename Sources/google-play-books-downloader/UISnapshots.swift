@@ -530,10 +530,14 @@ private final class MockData {
         sourceThumbnail = Art.browserWindow(width: 640, height: 400)
         otherThumbnail = Art.previewWindow(width: 640, height: 420)
 
-        let safari = NSWorkspace.shared.icon(forFile: "/Applications/Safari.app")
-        let preview = NSWorkspace.shared.icon(forFile: "/System/Applications/Preview.app")
-        let finder = NSWorkspace.shared.icon(forFile: "/System/Library/CoreServices/Finder.app")
-        let notes = NSWorkspace.shared.icon(forFile: "/System/Applications/Notes.app")
+        // Symlinks resolved: /Applications/Safari.app is a link and would get an alias badge.
+        func icon(_ path: String) -> NSImage {
+            NSWorkspace.shared.icon(forFile: URL(fileURLWithPath: path).resolvingSymlinksInPath().path)
+        }
+        let safari = icon("/Applications/Safari.app")
+        let preview = icon("/System/Applications/Preview.app")
+        let finder = icon("/System/Library/CoreServices/Finder.app")
+        let notes = icon("/System/Applications/Notes.app")
         playBooksWindow = SourceWindow(mockID: 101, appName: "Safari", title: "The Long Way Home — Google Play Books",
                                        icon: safari, frame: CGRect(x: 80, y: 60, width: 1280, height: 800))
         otherWindow = SourceWindow(mockID: 102, appName: "Preview", title: "",
