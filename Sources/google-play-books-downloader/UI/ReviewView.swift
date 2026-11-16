@@ -189,7 +189,9 @@ struct ReviewView: View {
             .disabled(r.locked)
             .help("Remove the selected pages from the PDF (⌫)")
         }
-        incompleteButton(r)
+        // After a save the pill would push the header to a third band; the marks on the
+        // thumbnails and ⋯ > Select incomplete pages stay.
+        if r.savedPDF == nil { incompleteButton(r) }
     }
 
     /// "“Name” · 64 pages · 2 min 31 s · 2 removed". The name only when the user typed one.
@@ -209,9 +211,9 @@ struct ReviewView: View {
         return parts.joined(separator: " · ")
     }
 
-    /// "Saved to ~/Downloads/x.pdf · 38.7 MB · images in the Trash".
+    /// "Saved to x.pdf · 38.7 MB · images in the Trash" (full path in the tooltip).
     private func savedLine(_ r: ReviewState, _ pdf: URL) -> String {
-        var parts = ["Saved to " + (pdf.path as NSString).abbreviatingWithTildeInPath]
+        var parts = ["Saved to " + pdf.lastPathComponent]
         if let bytes = r.savedBytes { parts.append(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) }
         if r.cacheTrashed { parts.append("images in the Trash") }
         return parts.joined(separator: " · ")

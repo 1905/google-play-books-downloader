@@ -17,6 +17,7 @@ struct SourceCard: View {
         }
         .animation(.easeInOut(duration: 0.2), value: model.source?.id)
         .animation(.easeInOut(duration: 0.2), value: model.sourceHealth)
+        .animation(.easeInOut(duration: 0.2), value: model.optionsExpanded)
     }
 
     // MARK: Empty
@@ -139,7 +140,8 @@ struct SourceCard: View {
                     .overlay(ProgressView().controlSize(.small))
             }
         }
-        .frame(maxHeight: 240)
+        // Smaller while the options are open, so the column still fits the window.
+        .frame(maxHeight: model.optionsExpanded ? 150 : 240)
         .frame(maxWidth: .infinity)
     }
 
