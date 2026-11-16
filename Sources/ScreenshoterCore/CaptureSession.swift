@@ -85,7 +85,7 @@ public final class CaptureSession {
     private var previewWidth = 0, previewHeight = 0
     private var noChange = 0
     /// Preview of the page on screen now: the last saved shot, or a held wrap candidate.
-    private var prevPreview = GrayImage(width: 0, height: 0) { didSet { prevRefCache = nil } }
+    private var prevPreview = GrayImage(width: 0, height: 0, pixels: []) { didSet { prevRefCache = nil } }
     private var prevRefCache: PageRef?
     /// Every saved shot (per shot, before split), in order: a small gray thumb (≤ `thumbWidth`
     /// px wide) of its preview and its near-blank flag at save time. Wrap-check hashes come from
