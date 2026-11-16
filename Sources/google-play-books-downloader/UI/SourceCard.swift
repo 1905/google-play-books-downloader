@@ -73,8 +73,9 @@ struct SourceCard: View {
 
     private func picked(_ s: SourceWindow) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            // Without Screen Recording there is nothing to preview: the row below names the window.
-            if model.permissions.screen == .granted || model.sourceHealth == .gone {
+            // Nothing to preview without Screen Recording or once the window is gone: the row
+            // below names the window and the banner says what happened.
+            if model.permissions.screen == .granted && model.sourceHealth != .gone {
                 preview(s)
             }
             HStack(alignment: .top, spacing: 12) {
@@ -116,7 +117,7 @@ struct SourceCard: View {
     private func preview(_ s: SourceWindow) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .underPageBackgroundColor))
+                .fill(Theme.pageSurface)
             if model.sourceHealth == .gone {
                 VStack(spacing: 8) {
                     Image(systemName: "xmark.rectangle")
