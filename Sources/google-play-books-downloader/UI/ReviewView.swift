@@ -5,6 +5,7 @@ import SwiftUI
 struct ReviewView: View {
     @Bindable var model: AppModel
     @State private var viewer: PageRef?
+    @State private var confirmTrash = false
 
     struct PageRef: Identifiable, Equatable {
         let url: URL
@@ -129,9 +130,18 @@ struct ReviewView: View {
 
             Spacer(minLength: 8)
 
-            Button("Delete cached images") { model.trashCache() }
-                .disabled(r.savedPDF == nil || r.locked)
-                .help(r.savedPDF == nil ? "Save the PDF first" : "Move the captured images to the Trash")
+            Button("Delete cached images") {
+                // Without a saved PDF the images are the only copy of the run: ask first.
+                if r.savedPDF == nil { confirmTrash = true } else { model.trashCache() }
+            }
+            .disabled(r.locked)
+            .help("Move the captured images to the Trash")
+            .confirmationDialog(trashQuestion(r), isPresented: $confirmTrash) {
+                Button("Delete", role: .destructive) { model.trashCache() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("No PDF was saved from this run.")
+            }
             if !model.headless {
                 Button {
                     model.newCapture()
@@ -157,6 +167,11 @@ struct ReviewView: View {
             .disabled(r.pages.isEmpty || r.locked)
         }
         .controlSize(.large)
+    }
+
+    private func trashQuestion(_ r: ReviewState) -> String {
+        let n = r.captureNumbers.count
+        return "Delete the \(n) captured \(n == 1 ? "page" : "pages")?"
     }
 
     // MARK: Banner
@@ -185,6 +200,21 @@ struct ReviewView: View {
             .padding(.vertical, 10)
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.green.opacity(0.12)))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.green.opacity(0.35), lineWidth: 0.5))
+            .padding(.horizontal, Theme.padding)
+            .padding(.bottom, 12)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        } else if r.cacheTrashed {
+            HStack(spacing: 10) {
+                Image(systemName: "trash")
+                    .foregroundStyle(.secondary)
+                Text("Captured images moved to the Trash.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.05)))
             .padding(.horizontal, Theme.padding)
             .padding(.bottom, 12)
             .transition(.move(edge: .top).combined(with: .opacity))

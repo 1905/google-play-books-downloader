@@ -10,9 +10,14 @@ public enum SpreadSplitter {
         cut(r, at: r.x + r.width / 2)
     }
 
-    /// [left, right], cut at the gutter found in `image` within ±6% of r's width around its
-    /// center; falls back to `split(_:)` (center) when no column clearly stands out.
-    /// `r` is in `image` coordinates. The right page starts at the gutter column.
+    /// [left, right], cut at `gutter(_:in:)`; falls back to `split(_:)` (center) when it finds
+    /// none. `r` is in `image` coordinates. The right page starts at the gutter column.
+    public static func split(_ r: PixelRect, in image: GrayImage) -> [PixelRect] {
+        gutter(r, in: image).map { cut(r, at: $0) } ?? split(r)
+    }
+
+    /// Gutter column (first column of the right page) in `image` within ±6% of r's width around
+    /// its center; nil when no column clearly stands out. `r` is in `image` coordinates.
     ///
     /// Column score = mean over r's rows of |L(x+1) − L(x−1)| (vertical edge) plus, for a thin
     /// line whose column mean differs from the means 2 px left and right by > 12, twice the
@@ -20,13 +25,13 @@ public enum SpreadSplitter {
     /// > 6 levels) in ≥ 90% of the rows: text and noise line up in some rows only, a gutter runs
     /// the full page height. The best candidate wins if its score is ≥ 8 and ≥ 2× the median
     /// score of all window columns.
-    public static func split(_ r: PixelRect, in image: GrayImage) -> [PixelRect] {
+    public static func gutter(_ r: PixelRect, in image: GrayImage) -> Int? {
         let c = r.clamped(width: image.width, height: image.height)
         let center = r.x + r.width / 2
         let reach = Int(Double(r.width) * 0.06)
         // Every probed pixel (x−2...x+2) must stay inside the rect.
         let lo = max(center - reach, c.x + 2), hi = min(center + reach, c.maxX - 3)
-        guard c == r, c.height > 0, lo <= hi else { return split(r) }
+        guard c == r, c.height > 0, lo <= hi else { return nil }
 
         let w = image.width, px = image.pixels
         // Column means over the window plus 2 px each side (for the thin-line test).
@@ -61,11 +66,12 @@ public enum SpreadSplitter {
         // right one is the first column of the right page.
         guard let best = scores.filter({ $0.coverage >= 0.9 })
                 .max(by: { $0.score < $1.score || ($0.score == $1.score && $0.x < $1.x) }),
-              best.score >= 8, best.score >= 2 * median else { return split(r) }
-        return cut(r, at: best.x)
+              best.score >= 8, best.score >= 2 * median else { return nil }
+        return best.x
     }
 
-    private static func cut(_ r: PixelRect, at x: Int) -> [PixelRect] {
+    /// [left, right], cut so the right page starts at column `x`.
+    static func cut(_ r: PixelRect, at x: Int) -> [PixelRect] {
         let lw = x - r.x
         return [
             PixelRect(x: r.x, y: r.y, width: lw, height: r.height),

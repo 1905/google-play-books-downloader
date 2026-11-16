@@ -109,6 +109,25 @@ final class SpreadSplitterTests: XCTestCase {
         XCTAssertEqual(SpreadSplitter.split(r, in: img), SpreadSplitter.split(r))
     }
 
+    func testGutterReportsFoundColumn() {
+        // Same layout as testWhitePageCreamPageThinGreyLine.
+        var img = TestImages.solid(1000, 600, 255)
+        TestImages.drawRect(into: &img, rect: PixelRect(x: 525, y: 0, width: 475, height: 600), value: 244)
+        TestImages.drawRect(into: &img, rect: PixelRect(x: 525, y: 0, width: 2, height: 600), value: 210)
+        drawText(into: &img, rect: PixelRect(x: 580, y: 40, width: 380, height: 520), seed: 5)
+        let x = SpreadSplitter.gutter(img.bounds, in: img)
+        XCTAssertNotNil(x)
+        XCTAssertLessThanOrEqual(abs((x ?? 0) - 525), 1)
+    }
+
+    func testGutterNilWhenNoGutter() {
+        let r = PixelRect(x: 0, y: 0, width: 1000, height: 600)
+        XCTAssertNil(SpreadSplitter.gutter(r, in: TestImages.noisePage(1000, 600, seed: 42)))
+        var text = TestImages.solid(1000, 600, 250)
+        drawText(into: &text, rect: PixelRect(x: 20, y: 20, width: 960, height: 560), seed: 6)
+        XCTAssertNil(SpreadSplitter.gutter(r, in: text))
+    }
+
     func testGutterOutsideWindowFallsBackToCenter() {
         // An edge at 30% is outside ±6% of center: ignored.
         var img = TestImages.solid(1000, 600, 250)

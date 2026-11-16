@@ -88,6 +88,65 @@ final class PageSinkTests: XCTestCase {
         XCTAssertThrowsError(try sink.replaceLast(4, with: TestImages.cgImage(from: merged)))
     }
 
+    /// Saves pages 1...3 and returns their bytes.
+    func saveThree(_ sink: DiskPageSink) throws -> [Data] {
+        try (1...3).map { seed in
+            try Data(contentsOf: sink.save(TestImages.cgImage(from: TestImages.noisePage(20, 10, seed: UInt64(seed)))))
+        }
+    }
+
+    /// Files in `dir` (not recursive, hidden included), sorted.
+    func listing(_ dir: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted()
+    }
+
+    func testReplaceLastLeavesNoTempFile() throws {
+        let dir = tmp.appendingPathComponent("run", isDirectory: true)
+        let sink = try DiskPageSink(directory: dir)
+        _ = try saveThree(sink)
+        _ = try sink.replaceLast(2, with: TestImages.cgImage(from: TestImages.noisePage(40, 10, seed: 9)))
+        XCTAssertEqual(try listing(dir), [".replaced", "0001.jpg", "0002.jpg"])
+    }
+
+    func testReplaceLastSetAsideFailureChangesNothing() throws {
+        // `.replaced/` exists but is read-only: setting 0003.jpg aside fails.
+        let dir = tmp.appendingPathComponent("run", isDirectory: true)
+        let sink = try DiskPageSink(directory: dir)
+        let before = try saveThree(sink)
+        let aside = dir.appendingPathComponent(".replaced", isDirectory: true)
+        let fm = FileManager.default
+        try fm.createDirectory(at: aside, withIntermediateDirectories: true)
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: aside.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: aside.path) }
+
+        XCTAssertThrowsError(try sink.replaceLast(2, with: TestImages.cgImage(from: TestImages.noisePage(40, 10, seed: 9))))
+        XCTAssertEqual(try listing(dir), [".replaced", "0001.jpg", "0002.jpg", "0003.jpg"], "no temp file left")
+        for (i, data) in before.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: dir.appendingPathComponent(String(format: "%04d.jpg", i + 1))), data,
+                           "page \(i + 1) changed")
+        }
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: aside.path)
+        XCTAssertEqual(try sink.save(TestImages.cgImage(from: TestImages.noisePage(20, 10, seed: 7))).lastPathComponent,
+                       "0004.jpg", "numbering unchanged")
+    }
+
+    func testReplaceLastInReadOnlyDirectoryChangesNothing() throws {
+        // The temp file cannot be created: the old code overwrote 0002.jpg in place here.
+        let dir = tmp.appendingPathComponent("run", isDirectory: true)
+        let sink = try DiskPageSink(directory: dir)
+        let before = try saveThree(sink)
+        let fm = FileManager.default
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+
+        XCTAssertThrowsError(try sink.replaceLast(2, with: TestImages.cgImage(from: TestImages.noisePage(40, 10, seed: 9))))
+        XCTAssertEqual(try listing(dir), ["0001.jpg", "0002.jpg", "0003.jpg"])
+        for (i, data) in before.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: dir.appendingPathComponent(String(format: "%04d.jpg", i + 1))), data,
+                           "page \(i + 1) changed")
+        }
+    }
+
     func testDropLastSetsFilesAside() throws {
         let dir = tmp.appendingPathComponent("run", isDirectory: true)
         let sink = try DiskPageSink(directory: dir)

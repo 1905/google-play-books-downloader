@@ -144,10 +144,15 @@ final class AppModel {
     /// Starts a run on the window (already re-fetched by the caller).
     var onStart: ((SCWindow, SessionConfig, NextKey, String) -> Void)?
     var onStop: (() -> Void)?
+    /// Called once when the running PDF export ends (saved or failed); AppDelegate sets it to
+    /// finish a quit that waits for the export.
+    @ObservationIgnored var onSaveFinished: (() -> Void)?
     /// Main window, for sheets and hiding it during the click picker.
     weak var window: NSWindow?
 
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    /// A Start is between the click and `onStart`: a second Return must not start a second run.
+    @ObservationIgnored private var isStarting = false
 
     init() {
         refreshPermissions()
@@ -351,7 +356,8 @@ final class AppModel {
     func start() {
         // End editing first, so a name still in the field editor lands in `runNameText`.
         window?.makeFirstResponder(nil)
-        guard startBlocker == nil, let s = source else { return }
+        guard !isStarting, stage == .setup, startBlocker == nil, let s = source else { return }
+        isStarting = true
         let runName = Settings.runName(from: runNameText, date: Date())
         var current = settings
         current.splitSpreads = true   // Play Books two-page view; no UI switch any more
@@ -360,6 +366,7 @@ final class AppModel {
         let key = current.nextKey
         Log.write("start requested: window \"\(s.title)\" (\(s.appName)), run name \"\(runName)\" (field \"\(runNameText)\"), \(Self.describe(current))")
         Task { @MainActor in
+            defer { isStarting = false }
             // The SCWindow frame is a snapshot and the window may have moved: re-fetch it.
             guard let fresh = try? await WindowPicker.window(id: s.id) else {
                 sourceHealth = .gone
@@ -502,6 +509,10 @@ final class AppModel {
                 alert = AlertItem(title: "Could not save the PDF",
                                   message: "\(error)\n\nThe cached images are kept in \(review?.cacheDir.path ?? "the cache").")
             }
+            if let done = onSaveFinished {
+                onSaveFinished = nil
+                done()
+            }
         }
     }
 
@@ -510,8 +521,9 @@ final class AppModel {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    /// Moves the run's cache folder to the Trash. Without a saved PDF the view asks first.
     func trashCache() {
-        guard let r = review, r.savedPDF != nil, !r.locked else { return }
+        guard let r = review, !r.locked else { return }
         do {
             try FileManager.default.trashItem(at: r.cacheDir, resultingItemURL: nil)
             review?.cacheTrashed = true

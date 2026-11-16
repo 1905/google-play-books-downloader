@@ -302,7 +302,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// review after it.
     @MainActor
     private func startCapture(window: SCWindow, config: SessionConfig, key: NextKey, runName: String) {
-        guard session == nil, let model else { return }
+        // `beginCapture` sets `.capturing` before the Task below, so a second call is refused at once.
+        guard session == nil, let model, model.stage != .capturing else { return }
         Log.write("start: \(window.owningApplication?.applicationName ?? "?") — \(window.title ?? ""), run \(runName), key \(key.rawValue), latency \(config.extraLatency) s, split \(config.splitSpreads), maxPages \(config.maxPages)")
         model.beginCapture(target: window.frame)
         let hud = CaptureHUDController(model: model)
@@ -339,6 +340,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag, let model, model.stage != .capturing { mainWindow?.show() }
         return true
+    }
+
+    /// Quit (Cmd+Q, or the main window closed) during a PDF export waits for the export to end,
+    /// so no `.partial-<uuid>.pdf` stays in the destination folder.
+    @MainActor
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model, model.review?.saving == true else { return .terminateNow }
+        Log.write("quit requested during PDF export, quitting when the export ends")
+        model.onSaveFinished = { NSApp.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
     }
 
     /// `--autostart` without `--save-pdf` exits with the run's code (6 if the capture failed).

@@ -105,41 +105,71 @@ public final class DiskPageSink: PageSink {
         return url
     }
 
-    /// Overwrites the first of the last `n` files with `image`. The others are moved into
-    /// `.replaced/` in the run directory (kept, not deleted), so numbering stays gapless.
+    /// Replaces the last `n` files with `image`: the first of them gets `image`, the others are
+    /// moved into `.replaced/` in the run directory (kept, not deleted), so numbering stays gapless.
+    /// All or nothing: `image` goes to a temp file in the run directory first, then the others
+    /// are set aside, then the temp file atomically replaces the first (rename(2)). On a failure
+    /// set-aside files move back, the temp file is removed, and the files and numbering stay as
+    /// they were.
     public func replaceLast(_ n: Int, with image: CGImage) throws -> URL {
         guard n >= 1, n <= count else { throw PageSinkError.replaceUnsupported }
         let first = count - n + 1
         let url = pageURL(first)
-        try write(image, to: url)
-        try setAside(from: first + 1)
+        let oldCount = count
+        let temp = directory.appendingPathComponent(".replace-\(UUID().uuidString).jpg")
+        try write(image, to: temp)
+        var moved: [(from: URL, to: URL)] = []
+        do {
+            moved = try setAside(from: first + 1)
+            guard rename(temp.path, url.path) == 0 else { throw PageSinkError.notWritable(url) }
+        } catch {
+            moveBack(moved)
+            count = oldCount
+            try? FileManager.default.removeItem(at: temp)
+            throw error
+        }
         return url
     }
 
-    /// Moves the last `n` files into `.replaced/` (kept, not deleted).
+    /// Moves the last `n` files into `.replaced/` (kept, not deleted). On a failure nothing moves.
     public func dropLast(_ n: Int) throws {
         guard n >= 1, n <= count else { throw PageSinkError.replaceUnsupported }
         try setAside(from: count - n + 1)
     }
 
-    /// Moves files `first...count` into `.replaced/`; numbering continues at `first`.
-    private func setAside(from first: Int) throws {
+    /// Moves files `first...count` into `.replaced/`; numbering continues at `first`. Returns the
+    /// moves done. On a failure the files already moved go back, `count` stays, and it rethrows.
+    @discardableResult
+    private func setAside(from first: Int) throws -> [(from: URL, to: URL)] {
         guard first <= count else {
             count = first - 1
-            return
+            return []
         }
         let fm = FileManager.default
         let aside = directory.appendingPathComponent(".replaced", isDirectory: true)
         try fm.createDirectory(at: aside, withIntermediateDirectories: true)
-        for i in first...count {
-            let from = pageURL(i)
-            var to = aside.appendingPathComponent(from.lastPathComponent)
-            if fm.fileExists(atPath: to.path) {  // an earlier replace set aside the same number
-                to = aside.appendingPathComponent("\(from.deletingPathExtension().lastPathComponent)-\(UUID().uuidString).\(from.pathExtension)")
+        var moved: [(from: URL, to: URL)] = []
+        do {
+            for i in first...count {
+                let from = pageURL(i)
+                var to = aside.appendingPathComponent(from.lastPathComponent)
+                if fm.fileExists(atPath: to.path) {  // an earlier replace set aside the same number
+                    to = aside.appendingPathComponent("\(from.deletingPathExtension().lastPathComponent)-\(UUID().uuidString).\(from.pathExtension)")
+                }
+                try fm.moveItem(at: from, to: to)
+                moved.append((from, to))
             }
-            try fm.moveItem(at: from, to: to)
+        } catch {
+            moveBack(moved)
+            throw error
         }
         count = first - 1
+        return moved
+    }
+
+    /// Undoes `setAside` moves, last first. Best effort: a file that cannot move back stays in `.replaced/`.
+    private func moveBack(_ moved: [(from: URL, to: URL)]) {
+        for m in moved.reversed() { try? FileManager.default.moveItem(at: m.to, to: m.from) }
     }
 
     private func pageURL(_ n: Int) -> URL {

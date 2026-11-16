@@ -261,6 +261,70 @@ final class MemorySink: PageSink {
     }
 }
 
+/// Viewer showing scripted preview frames (`FakeViewer` window size): each key press shows the
+/// next frame after `delay` virtual seconds; after the last frame presses change nothing.
+/// Full shot = 4× nearest-neighbour upscale.
+final class ScriptedViewer: WindowCapturer, PageTurner {
+    let clock: FakeClock
+    let frames: [GrayImage]
+    var delay: Double = 0.3
+    private(set) var turnCount = 0
+    private var target = 0
+    private var schedule: [(time: TimeInterval, index: Int)] = []
+
+    init(clock: FakeClock, frames: [GrayImage]) {
+        self.clock = clock
+        self.frames = frames
+    }
+
+    func turnPage() throws {
+        turnCount += 1
+        if turnCount > 100 { throw FakeViewer.Boom() }  // livelock guard
+        if target < frames.count - 1 {
+            target += 1
+            schedule.append((clock.now() + delay, target))
+        }
+    }
+
+    private var shown: GrayImage { frames[schedule.last(where: { $0.time <= clock.now() })?.index ?? 0] }
+
+    func captureFull() async throws -> CGImage { TestImages.cgImage(from: FakeViewer.upscale(shown)) }
+    func capturePreview() async throws -> CGImage { TestImages.cgImage(from: shown) }
+
+    /// Expected full-res crop of frame `i` at preview rect `r`.
+    func expected(_ i: Int, _ r: PixelRect) -> GrayImage {
+        FakeViewer.upscale(frames[i]).cropped(r.scaled(by: FakeViewer.scale))
+    }
+
+    /// Empty window: dark backdrop and a light toolbar strip, as `FakeViewer`.
+    static func window() -> GrayImage {
+        var img = TestImages.solid(FakeViewer.previewW, FakeViewer.previewH, 30)
+        TestImages.drawRect(into: &img, rect: PixelRect(x: 0, y: 0, width: FakeViewer.previewW, height: 4), value: 200)
+        return img
+    }
+
+    /// Noise page (comic-like) at `r`.
+    static func noisePage(_ seed: UInt64, _ r: PixelRect = FakeViewer.portrait) -> GrayImage {
+        var img = window()
+        TestImages.drawNoise(into: &img, rect: r, seed: seed * 7919, block: 2)
+        return img
+    }
+
+    /// Sparse text page: white portrait page with one short dark line (`bar`).
+    static func sparsePage(bar: PixelRect) -> GrayImage {
+        var img = window()
+        TestImages.drawRect(into: &img, rect: FakeViewer.portrait, value: 240)
+        TestImages.drawRect(into: &img, rect: bar, value: 40)
+        return img
+    }
+}
+
+/// Sink whose every save fails.
+final class ThrowingSink: PageSink {
+    struct DiskFull: Error {}
+    func save(_ image: CGImage) throws -> URL { throw DiskFull() }
+}
+
 // MARK: Tests
 
 final class CaptureSessionTests: XCTestCase {
@@ -274,12 +338,12 @@ final class CaptureSessionTests: XCTestCase {
         logs = []
     }
 
-    func makeSession(_ viewer: FakeViewer, config: SessionConfig = SessionConfig()) -> CaptureSession {
+    func makeSession(_ viewer: WindowCapturer & PageTurner, config: SessionConfig = SessionConfig()) -> CaptureSession {
         CaptureSession(config: config, capturer: viewer, turner: viewer, clock: clock, sink: sink,
                        log: { [unowned self] in self.logs.append($0) })
     }
 
-    func run(_ viewer: FakeViewer, config: SessionConfig = SessionConfig()) async -> SessionResult {
+    func run(_ viewer: WindowCapturer & PageTurner, config: SessionConfig = SessionConfig()) async -> SessionResult {
         await makeSession(viewer, config: config).run()
     }
 
@@ -305,6 +369,16 @@ final class CaptureSessionTests: XCTestCase {
         XCTAssertEqual(got.count, indices.count, "page count", file: file, line: line)
         for (g, i) in zip(got, indices) {
             XCTAssertTrue(g == viewer.expectedPage(i), "saved page differs from page \(i)", file: file, line: line)
+        }
+    }
+
+    /// Saved files are frames `indices` of a scripted viewer, cropped to `rect`.
+    func assertScripted(_ viewer: ScriptedViewer, _ indices: [Int], rect: PixelRect = FakeViewer.portrait,
+                        file: StaticString = #filePath, line: UInt = #line) {
+        let got = sink.grays
+        XCTAssertEqual(got.count, indices.count, "page count", file: file, line: line)
+        for (g, i) in zip(got, indices) {
+            XCTAssertTrue(g == viewer.expected(i, rect), "saved page differs from frame \(i)", file: file, line: line)
         }
     }
 
@@ -351,7 +425,8 @@ final class CaptureSessionTests: XCTestCase {
         let result = await run(viewer)
         XCTAssertEqual(result.reason, .endOfDocument)
         assertPagesMatch(viewer, [0, 1, 2, 3])
-        XCTAssertEqual(viewer.turnCount, 4)
+        // Press 4 shows page 0 again (wrap candidate), press 5 shows page 1 (confirms the wrap).
+        XCTAssertEqual(viewer.turnCount, 5)
         XCTAssertTrue(logs.contains("page matches page 1 — viewer wrapped, stopping"), "\(logs)")
     }
 
@@ -489,7 +564,8 @@ final class CaptureSessionTests: XCTestCase {
     func testFirstTurnNoChangeSavesFirstShot() async {
         let viewer = FakeViewer(clock: clock, pages: 1)
         let result = await run(viewer)
-        XCTAssertEqual(result.reason, .endOfDocument)
+        // No press ever changed the page: a failure (key not delivered), not an end of document.
+        XCTAssertEqual(result.reason, .captureFailed("the page never turned — the key did not reach the window"))
         XCTAssertEqual(result.pages.count, 1)
         XCTAssertEqual(viewer.turnCount, 2)
         XCTAssertNil(result.zone)
@@ -599,15 +675,22 @@ final class CaptureSessionTests: XCTestCase {
         let viewer = FakeViewer(clock: clock, pages: 4, pageRect: FakeViewer.landscape)
         viewer.gutterX = 42  // center is preview column 40
         let result = await run(viewer)
-        XCTAssertEqual(result.pages.count, 6)
+        // Every shot has the gutter, the last one too: a real final spread, so it is not merged.
+        XCTAssertEqual(result.pages.count, 7)
+        XCTAssertEqual(sink.replaced, [])
         let full = FakeViewer.landscape.scaled(by: FakeViewer.scale)
-        assertCoverSpreadsCover(viewer, shots: 4, halves: { i in
+        let got = sink.grays
+        guard got.count == 7 else { return }
+        XCTAssertTrue(got[0] == viewer.expectedPage(0), "front cover")
+        for i in 1...3 {
             // The splitter on the full shot must agree with the session, which runs it on the crop.
-            let halves = SpreadSplitter.split(full, in: FakeViewer.upscale(viewer.window(i)))
+            let page = FakeViewer.upscale(viewer.window(i))
+            let halves = SpreadSplitter.split(full, in: page)
             XCTAssertNotEqual(halves, SpreadSplitter.split(full), "gutter not found")
             XCTAssertEqual(halves[1].x, 42 * FakeViewer.scale, accuracy: 4)
-            return halves
-        })
+            XCTAssertTrue(got[2 * i - 1] == page.cropped(halves[0]), "left half of shot \(i)")
+            XCTAssertTrue(got[2 * i] == page.cropped(halves[1]), "right half of shot \(i)")
+        }
     }
 
     func testLoadingPlaceholderIsNotSaved() async {
@@ -659,7 +742,7 @@ final class CaptureSessionTests: XCTestCase {
         assertPagesMatch(viewer, [0, 1, 2, 3])
         XCTAssertTrue(logs.contains { $0.hasPrefix("zone recomputed") }, "\(logs)")
         XCTAssertTrue(logs.contains("page matches page 1 — viewer wrapped, stopping"), "\(logs)")
-        XCTAssertEqual(viewer.turnCount, 4)
+        XCTAssertEqual(viewer.turnCount, 5, "one confirm press after the wrap candidate")
     }
 
     func testLoadingBandSpreadWaitsForFullPages() async {
@@ -723,5 +806,127 @@ final class CaptureSessionTests: XCTestCase {
         guard let z = result.zone else { return XCTFail("no zone") }
         XCTAssertGreaterThan(z.maxY, viewer.peek!.y * FakeViewer.scale, "zone \(z) should include the strip here")
         assertPagesMatch(viewer, [0, 1, 2])
+    }
+
+    // MARK: Review fixes
+
+    func testKeyNeverReachingWindowIsAFailure() async {
+        // The first two presses never reach the window: no page turn ever worked.
+        let viewer = FakeViewer(clock: clock, pages: 5)
+        viewer.ignoredPresses = [1, 2]
+        let session = makeSession(viewer)
+        var replacedCalls = 0
+        session.onPagesReplaced = { _ in replacedCalls += 1 }
+        let result = await session.run()
+        XCTAssertEqual(result.reason, .captureFailed("the page never turned — the key did not reach the window"))
+        XCTAssertEqual(result.pages.count, 1, "the first shot is still saved")
+        XCTAssertNil(result.zone)
+        XCTAssertEqual(viewer.turnCount, 2)
+        XCTAssertEqual(sink.dropped, [])
+        XCTAssertEqual(sink.replaced, [])
+        XCTAssertEqual(replacedCalls, 0)
+    }
+
+    func testFirstShotSaveFailureIsReported() async {
+        let viewer = FakeViewer(clock: clock, pages: 1)
+        let session = CaptureSession(config: SessionConfig(), capturer: viewer, turner: viewer, clock: clock,
+                                     sink: ThrowingSink(), log: { [unowned self] in self.logs.append($0) })
+        let result = await session.run()
+        guard case .captureFailed(let msg) = result.reason else { return XCTFail("\(result.reason)") }
+        XCTAssertTrue(msg.hasPrefix("save failed"), msg)
+        XCTAssertEqual(result.pages, [])
+    }
+
+    func testSparsePagesAreAllSaved() async {
+        // Text-book pages that differ by one short line: the zone hash moves only ~8 of 256 bits
+        // (≤ matchDistance), so only the block-change rule sees these turns.
+        let bars = [PixelRect(x: 30, y: 20, width: 12, height: 3), PixelRect(x: 30, y: 30, width: 12, height: 3),
+                    PixelRect(x: 34, y: 40, width: 8, height: 3), PixelRect(x: 30, y: 48, width: 14, height: 3)]
+        let frames = [ScriptedViewer.noisePage(1)] + bars.map { ScriptedViewer.sparsePage(bar: $0) }
+        let viewer = ScriptedViewer(clock: clock, frames: frames)
+        let result = await run(viewer)
+        XCTAssertEqual(result.reason, .endOfDocument)
+        assertScripted(viewer, Array(0..<frames.count))
+        // Only the two presses after the last page find no change.
+        XCTAssertEqual(viewer.turnCount, frames.count + 1)
+    }
+
+    func testLookAlikePagesFarApartAreAllSaved() async {
+        // Frame 4 repeats frame 1 (a repeated illustration), but frame 5 differs from frame 2:
+        // not a wrap. All pages are saved, in order.
+        let seeds: [UInt64] = [1, 2, 3, 4, 2, 5, 6]
+        let viewer = ScriptedViewer(clock: clock, frames: seeds.map { ScriptedViewer.noisePage($0) })
+        let result = await run(viewer)
+        XCTAssertEqual(result.reason, .endOfDocument)
+        assertScripted(viewer, Array(0..<seeds.count))
+        XCTAssertTrue(logs.contains("page matches page 2 — checking the next page"), "\(logs)")
+        XCTAssertTrue(logs.contains("page matching page 2 was not a wrap, kept"), "\(logs)")
+        XCTAssertFalse(logs.contains { $0.contains("wrapped") }, "\(logs)")
+    }
+
+    func testLookAlikeLastPageIsSaved() async {
+        // The last frame repeats frame 1. The confirm press changes nothing, so it was the real
+        // last page: saved, and the run ends normally.
+        let viewer = ScriptedViewer(clock: clock, frames: ([1, 2, 3, 2] as [UInt64]).map { ScriptedViewer.noisePage($0) })
+        let result = await run(viewer)
+        XCTAssertEqual(result.reason, .endOfDocument)
+        assertScripted(viewer, [0, 1, 2, 3])
+        XCTAssertTrue(logs.contains("page matches page 2 — checking the next page"), "\(logs)")
+        XCTAssertFalse(logs.contains { $0.contains("wrapped") }, "\(logs)")
+    }
+
+    func testWrapConfirmedByLastSavedPage() async {
+        // The viewer jumps back: frame 3 repeats frame 1, frame 4 repeats frame 2 (the last saved
+        // shot). A real wrap: nothing saved twice.
+        let viewer = ScriptedViewer(clock: clock, frames: ([1, 2, 3, 2, 3] as [UInt64]).map { ScriptedViewer.noisePage($0) })
+        let result = await run(viewer)
+        XCTAssertEqual(result.reason, .endOfDocument)
+        assertScripted(viewer, [0, 1, 2])
+        XCTAssertTrue(logs.contains("page matches page 2 — viewer wrapped, stopping"), "\(logs)")
+        XCTAssertEqual(viewer.turnCount, 4)
+    }
+
+    func testLastSpreadWithGutterIsNotMerged() async {
+        // A comic ending on [blank page | ad page]: the blank/page edge is a real gutter, so the
+        // last shot stays two files instead of one wide image with a blank half.
+        let spread = FakeViewer.landscape
+        let half = spread.width / 2
+        var last = ScriptedViewer.window()
+        TestImages.drawRect(into: &last, rect: PixelRect(x: spread.x, y: spread.y, width: half, height: spread.height), value: 240)
+        TestImages.drawNoise(into: &last, rect: PixelRect(x: spread.x + half, y: spread.y, width: half, height: spread.height),
+                             seed: 5 * 7919, block: 2)
+        let viewer = ScriptedViewer(clock: clock, frames: [ScriptedViewer.noisePage(3, spread), last])
+        let result = await run(viewer)
+        XCTAssertEqual(result.reason, .endOfDocument)
+        XCTAssertEqual(result.pages.count, 3)
+        XCTAssertEqual(sink.replaced, [])
+        XCTAssertTrue(logs.contains("last shot has a gutter, kept as two pages"), "\(logs)")
+        let full = spread.scaled(by: FakeViewer.scale)
+        let page = FakeViewer.upscale(last)
+        XCTAssertEqual(SpreadSplitter.gutter(full, in: page), full.x + full.width / 2)
+        let halves = SpreadSplitter.split(full, in: page)
+        let got = sink.grays
+        guard got.count == 3 else { return }
+        XCTAssertTrue(got[0] == viewer.expected(0, spread), "front cover")
+        XCTAssertTrue(got[1] == page.cropped(halves[0]), "blank left page")
+        XCTAssertTrue(got[2] == page.cropped(halves[1]), "right page")
+    }
+
+    func testZoneGrowsWithoutShrinking() async {
+        // The last turn changes only the middle of the page (its margins stay the same) plus an
+        // overlay left of the zone. The zone grows to the overlay and still holds the whole page.
+        var third = ScriptedViewer.noisePage(2)
+        TestImages.drawNoise(into: &third, rect: PixelRect(x: 32, y: 20, width: 16, height: 24), seed: 3 * 7919, block: 2)
+        TestImages.drawNoise(into: &third, rect: PixelRect(x: 4, y: 12, width: 12, height: 36), seed: 4 * 7919, block: 2)
+        let viewer = ScriptedViewer(clock: clock, frames: [ScriptedViewer.noisePage(1), ScriptedViewer.noisePage(2), third])
+        let result = await run(viewer)
+        XCTAssertEqual(result.reason, .endOfDocument)
+        XCTAssertEqual(result.pages.count, 3)
+        XCTAssertTrue(logs.contains { $0.hasPrefix("zone recomputed") }, "\(logs)")
+        guard let z = result.zone else { return XCTFail("no zone") }
+        let page = FakeViewer.portrait.scaled(by: FakeViewer.scale)
+        XCTAssertTrue(z.x <= page.x && z.y <= page.y && z.maxX >= page.maxX && z.maxY >= page.maxY,
+                      "zone \(z) cuts the page \(page)")
+        XCTAssertLessThanOrEqual(z.x, 4 * FakeViewer.scale, "zone \(z) does not reach the overlay")
     }
 }
