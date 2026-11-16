@@ -112,7 +112,7 @@ final class AppModel {
     /// The permissions card is expanded although everything is granted.
     var permissionsExpanded = false
     /// No app bundle: macOS ties the grants to the terminal app that started the binary.
-    let runningFromTerminal = Bundle.main.bundleIdentifier == nil
+    var runningFromTerminal = Bundle.main.bundleIdentifier == nil
 
     // MARK: Source window
 
@@ -150,6 +150,8 @@ final class AppModel {
     /// Main window, for sheets and hiding it during the click picker.
     weak var window: NSWindow?
 
+    /// `--ui-snapshots` only: replaces the ScreenCaptureKit window list.
+    @ObservationIgnored var mockWindowList: (() async -> [SourceWindow])?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     /// A Start is between the click and `onStart`: a second Return must not start a second run.
     @ObservationIgnored private var isStarting = false
@@ -255,6 +257,11 @@ final class AppModel {
     }
 
     func loadWindowList() async {
+        if let mockWindowList {
+            windowList = await mockWindowList()
+            windowListError = nil
+            return
+        }
         guard permissions.screen == .granted else {   // SCShareableContent can show the prompt
             windowList = []
             windowListError = "Allow Screen Recording to list windows."

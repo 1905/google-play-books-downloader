@@ -302,7 +302,7 @@ private struct PageCell: View {
 }
 
 /// Large view of one page with ←/→ navigation. Esc closes.
-private struct PageViewer: View {
+struct PageViewer: View {
     @Bindable var model: AppModel
     @State private var current: URL
     @State private var image: NSImage?

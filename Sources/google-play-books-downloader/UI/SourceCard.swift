@@ -225,7 +225,7 @@ struct AppIcon: View {
 }
 
 /// Popover list of on-screen windows: app icon, app name, window title.
-private struct WindowListView: View {
+struct WindowListView: View {
     @Bindable var model: AppModel
     let onPick: (SourceWindow) -> Void
     @State private var loading = true
