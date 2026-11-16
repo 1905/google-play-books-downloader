@@ -146,7 +146,6 @@ struct SourceCard: View {
             }
         }
         .aspectRatio(16 / 10, contentMode: .fit)
-        .frame(maxHeight: 220)
         .overlay(alignment: .topTrailing) {
             if model.sourceHealth == .ok, model.sourceThumbnail != nil, model.permissions.screen == .granted {
                 Label("Live", systemImage: "dot.radiowaves.left.and.right")
@@ -154,10 +153,11 @@ struct SourceCard: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Capsule().fill(.ultraThinMaterial))
-                    .padding(14)
+                    .padding(16)
                     .help("Refreshed every 2 seconds")
             }
         }
+        .frame(maxHeight: 220)
         .frame(maxWidth: .infinity)
     }
 
