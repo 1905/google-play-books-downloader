@@ -1,51 +1,66 @@
 import SwiftUI
 
-/// Stage 1, two columns: permissions + viewer window on the left, settings on the right,
-/// Start bar across the bottom. The ScrollView only scrolls when the window is made smaller
-/// than the content (e.g. while the permissions card is expanded).
+/// Stage 1, one centred column read top to bottom: permissions (loud only while one is
+/// missing), the book window (the main element), quiet capture options, Start bar across the
+/// bottom. The column is centred vertically while it fits and scrolls when it does not.
 struct SetupView: View {
     @Bindable var model: AppModel
+    private static let optionsID = "options"
 
     var body: some View {
-        ScrollView {
-            HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 16) {
-                    PermissionsCard(model: model)
-                    SourceCard(model: model)
+        VStack(spacing: 0) {
+            GeometryReader { geo in
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            PermissionsCard(model: model)
+                            SourceCard(model: model)
+                            OptionsSection(model: model)
+                                .id(Self.optionsID)
+                        }
+                        .frame(maxWidth: Theme.setupColumn)
+                        .padding(.horizontal, Theme.padding)
+                        .padding(.vertical, Theme.padding)
+                        // At least the visible height: centred while it fits, top-aligned when it scrolls.
+                        .frame(maxWidth: .infinity, minHeight: geo.size.height)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    // Opened options are fully visible: scroll them into view.
+                    .onChange(of: model.optionsExpanded) { _, open in
+                        guard open else { return }
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(220))   // after the open animation
+                            withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(Self.optionsID, anchor: .bottom) }
+                        }
+                    }
+                    .onAppear {
+                        if model.optionsExpanded { proxy.scrollTo(Self.optionsID, anchor: .bottom) }
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                SettingsCard(model: model)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding(.horizontal, Theme.padding)
-            .padding(.top, 12)
-            .padding(.bottom, Theme.padding)
+            startBar
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .safeAreaInset(edge: .bottom, spacing: 0) { startBar }
     }
 
+    /// Every blocker is already explained in the body (permissions card, window card, its
+    /// banner), so the bar only speaks when Start is enabled; the reason stays in the tooltip.
     private var startBar: some View {
         VStack(spacing: 0) {
             Divider()
             HStack(alignment: .center, spacing: 14) {
-                VStack(alignment: .leading, spacing: 3) {
-                    if let blocker = model.startBlocker {
-                        Label(blocker, systemImage: "info.circle")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Label("Ready. Leave the mouse and keyboard alone during the run.", systemImage: "checkmark.circle")
+                if model.startBlocker == nil {
+                    HStack(spacing: 6) {
+                        Label("Ready — hands off the mouse and keyboard.", systemImage: "checkmark.circle")
                             .foregroundStyle(.green)
-                    }
-                    HStack(spacing: 4) {
-                        Text("Press")
                         KeyCap(text: "ESC")
-                        Text("at any time to stop.")
+                            .foregroundStyle(.secondary)
+                        Text("stops")
+                            .foregroundStyle(.secondary)
                     }
-                    .foregroundStyle(.tertiary)
+                    .font(.callout)
+                    .lineLimit(1)
+                    .transition(.opacity)
                 }
-                .font(.callout)
-                .animation(.easeInOut(duration: 0.15), value: model.startBlocker)
                 Spacer(minLength: 8)
                 Button {
                     model.start()
@@ -58,7 +73,9 @@ struct SetupView: View {
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
                 .disabled(model.startBlocker != nil)
+                .help(model.startBlocker ?? "Start turning pages and saving them")
             }
+            .animation(.easeInOut(duration: 0.15), value: model.startBlocker)
             .padding(.horizontal, Theme.padding)
             .padding(.vertical, 14)
         }

@@ -28,6 +28,18 @@ if args.contains("--help") || args.contains("-h") {
     exit(ExitCode.ok)
 }
 
+#if DEBUG
+// Hidden, debug builds only: renders every UI state to PNG with mock data (see UISnapshots.swift).
+// Not in `usage`. A release build rejects it as an unknown flag.
+if let i = args.firstIndex(of: "--ui-snapshots") {
+    guard i + 1 < args.count else {
+        FileHandle.standardError.write(Data("error: --ui-snapshots needs an output folder\n".utf8))
+        exit(ExitCode.badArgs)
+    }
+    UISnapshots.run(outDir: args[i + 1])
+}
+#endif
+
 let options: CLIOptions
 do {
     options = try CLIOptions.parse(args)

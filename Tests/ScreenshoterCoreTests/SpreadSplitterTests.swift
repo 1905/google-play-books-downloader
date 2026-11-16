@@ -35,9 +35,11 @@ final class SpreadSplitterTests: XCTestCase {
 
     // MARK: split(_:in:) — gutter search
 
-    /// Asserts a 2-rect split of `r` whose cut sits within `tol` px of `x`.
-    func assertCut(_ rects: [PixelRect], _ r: PixelRect, at x: Int, tol: Int = 1,
+    /// Asserts a 2-rect split of `r` at a found gutter whose cut sits within `tol` px of `x`.
+    func assertCut(_ split: (rects: [PixelRect], gutter: Bool), _ r: PixelRect, at x: Int, tol: Int = 1,
                    file: StaticString = #filePath, line: UInt = #line) {
+        let rects = split.rects
+        XCTAssertTrue(split.gutter, "no gutter found", file: file, line: line)
         XCTAssertEqual(rects.count, 2, file: file, line: line)
         guard rects.count == 2 else { return }
         XCTAssertEqual(rects[0].x, r.x, file: file, line: line)
@@ -45,6 +47,13 @@ final class SpreadSplitterTests: XCTestCase {
         XCTAssertEqual(rects[1].maxX, r.maxX, file: file, line: line)
         XCTAssertTrue(rects.allSatisfy { $0.y == r.y && $0.height == r.height }, file: file, line: line)
         XCTAssertLessThanOrEqual(abs(rects[1].x - x), tol, "cut at \(rects[1].x), want \(x)", file: file, line: line)
+    }
+
+    /// Asserts a split of `r` at the center fallback (no gutter found).
+    func assertCenterFallback(_ split: (rects: [PixelRect], gutter: Bool), _ r: PixelRect,
+                              file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertFalse(split.gutter, "gutter reported", file: file, line: line)
+        XCTAssertEqual(split.rects, SpreadSplitter.split(r), file: file, line: line)
     }
 
     /// Text-like content: dark 3 px strokes on random columns of `rect`, every 6th row band.
@@ -98,7 +107,7 @@ final class SpreadSplitterTests: XCTestCase {
     func testNoGutterFallsBackToCenter() {
         let r = PixelRect(x: 0, y: 0, width: 1000, height: 600)
         let img = TestImages.noisePage(1000, 600, seed: 42)
-        XCTAssertEqual(SpreadSplitter.split(r, in: img), SpreadSplitter.split(r))
+        assertCenterFallback(SpreadSplitter.split(r, in: img), r)
     }
 
     func testTextAcrossCenterFallsBackToCenter() {
@@ -106,7 +115,26 @@ final class SpreadSplitterTests: XCTestCase {
         var img = TestImages.solid(1000, 600, 250)
         let r = img.bounds
         drawText(into: &img, rect: PixelRect(x: 20, y: 20, width: 960, height: 560), seed: 6)
-        XCTAssertEqual(SpreadSplitter.split(r, in: img), SpreadSplitter.split(r))
+        assertCenterFallback(SpreadSplitter.split(r, in: img), r)
+    }
+
+    func testGutterReportsFoundColumn() {
+        // Same layout as testWhitePageCreamPageThinGreyLine.
+        var img = TestImages.solid(1000, 600, 255)
+        TestImages.drawRect(into: &img, rect: PixelRect(x: 525, y: 0, width: 475, height: 600), value: 244)
+        TestImages.drawRect(into: &img, rect: PixelRect(x: 525, y: 0, width: 2, height: 600), value: 210)
+        drawText(into: &img, rect: PixelRect(x: 580, y: 40, width: 380, height: 520), seed: 5)
+        let x = SpreadSplitter.gutter(img.bounds, in: img)
+        XCTAssertNotNil(x)
+        XCTAssertLessThanOrEqual(abs((x ?? 0) - 525), 1)
+    }
+
+    func testGutterNilWhenNoGutter() {
+        let r = PixelRect(x: 0, y: 0, width: 1000, height: 600)
+        XCTAssertNil(SpreadSplitter.gutter(r, in: TestImages.noisePage(1000, 600, seed: 42)))
+        var text = TestImages.solid(1000, 600, 250)
+        drawText(into: &text, rect: PixelRect(x: 20, y: 20, width: 960, height: 560), seed: 6)
+        XCTAssertNil(SpreadSplitter.gutter(r, in: text))
     }
 
     func testGutterOutsideWindowFallsBackToCenter() {
@@ -114,6 +142,6 @@ final class SpreadSplitterTests: XCTestCase {
         var img = TestImages.solid(1000, 600, 250)
         let r = img.bounds
         TestImages.drawRect(into: &img, rect: PixelRect(x: 0, y: 0, width: 300, height: 600), value: 200)
-        XCTAssertEqual(SpreadSplitter.split(r, in: img), SpreadSplitter.split(r))
+        assertCenterFallback(SpreadSplitter.split(r, in: img), r)
     }
 }

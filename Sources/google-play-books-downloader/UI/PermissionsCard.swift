@@ -25,27 +25,35 @@ struct PermissionsCard: View {
             model.permissionsExpanded = true
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "checkmark.shield.fill")
+                Image(systemName: "checkmark.shield.fill").foregroundStyle(.green)
                 Text("Permissions OK")
-                Image(systemName: "chevron.down").imageScale(.small).foregroundStyle(.secondary)
+                Image(systemName: "chevron.down").imageScale(.small)
             }
-            .font(.callout.weight(.medium))
-            .foregroundStyle(.green)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(Color.green.opacity(0.12)))
-            .overlay(Capsule().strokeBorder(Color.green.opacity(0.35), lineWidth: 0.5))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color.primary.opacity(0.05)))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .help("Screen Recording and Accessibility are allowed. Click for details.")
     }
 
+    private var title: String {
+        let missing = (model.permissions.screen == .granted ? 0 : 1) + (model.permissions.accessibility ? 0 : 1)
+        switch missing {
+        case 0: return "Permissions"
+        case 1: return "Allow one more macOS permission"
+        default: return "Allow two macOS permissions"
+        }
+    }
+
     private var card: some View {
         Card(tint: model.permissions.allGranted ? nil : .orange) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    CardHeader(title: model.permissions.allGranted ? "Permissions" : "Permissions needed",
+                    CardHeader(title: title,
                                symbol: model.permissions.allGranted ? "checkmark.shield" : "exclamationmark.shield.fill")
                         .foregroundStyle(model.permissions.allGranted ? Color.primary : Color.orange)
                     Spacer()
@@ -53,11 +61,6 @@ struct PermissionsCard: View {
                         Button("Hide") { model.permissionsExpanded = false }
                             .buttonStyle(.link)
                     }
-                }
-                if !model.permissions.allGranted {
-                    Text("The app needs two macOS permissions before it can capture.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
                 }
                 VStack(spacing: 0) {
                     screenRow
@@ -76,25 +79,22 @@ struct PermissionsCard: View {
         return PermissionRow(
             symbol: "rectangle.dashed.badge.record",
             name: "Screen Recording",
-            reason: "To see the Play Books window.",
-            pill: {
-                switch state {
-                case .granted: StatusPill(text: "Granted", color: .green, symbol: "checkmark")
-                case .needed: StatusPill(text: "Needed", color: .orange)
-                case .needsRelaunch: StatusPill(text: "Relaunch needed", color: .blue, symbol: "arrow.clockwise")
-                }
-            },
+            reason: "To see the book window.",
+            // The card already says what is missing: only the relaunch step gets a pill.
+            pill: state == .needsRelaunch
+                ? StatusPill(text: "Relaunch needed", color: .blue, symbol: "arrow.clockwise") : nil,
             actions: {
                 switch state {
                 case .granted:
-                    EmptyView()
+                    GrantedCheck()
                 case .needsRelaunch:
-                    relaunchButton
-                    Button("Open Settings") { model.openSettings(.screenRecording) }
+                    // From a terminal there is no app to relaunch: Open Settings is the only button.
+                    if !model.runningFromTerminal { relaunchButton }
+                    settingsButton(.screenRecording, prominent: model.runningFromTerminal)
                 case .needed:
                     Button("Allow…") { model.requestScreenRecording() }
                         .buttonStyle(.borderedProminent)
-                    Button("Open Settings") { model.openSettings(.screenRecording) }
+                    settingsButton(.screenRecording)
                 }
             },
             detail: {
@@ -103,11 +103,11 @@ struct PermissionsCard: View {
                     EmptyView()
                 case .needsRelaunch:
                     Text(model.runningFromTerminal
-                         ? "Turn on your terminal app in System Settings, then quit it, open it again and restart google-play-books-downloader."
-                         : "Turn on \(AppInfo.name) in System Settings, then relaunch. macOS applies it only after a restart.")
+                         ? "Turn on your terminal app in System Settings, then restart the terminal and this tool."
+                         : "Turn on \(AppInfo.name) in System Settings, then relaunch.")
                 case .needed:
                     if model.runningFromTerminal {
-                        Text("Running from a terminal: grant it to your terminal app (Terminal, iTerm…) and restart it.")
+                        Text("Grant it to your terminal app, then restart the terminal.")
                     }
                 }
             }
@@ -119,41 +119,45 @@ struct PermissionsCard: View {
         return PermissionRow(
             symbol: "accessibility",
             name: "Accessibility",
-            reason: "To press the next-page key.",
-            pill: {
-                if granted {
-                    StatusPill(text: "Granted", color: .green, symbol: "checkmark")
-                } else {
-                    StatusPill(text: "Needed", color: .orange)
-                }
-            },
+            reason: "To press the page-turn key.",
             actions: {
-                if !granted {
+                if granted {
+                    GrantedCheck()
+                } else {
                     Button("Allow…") { model.requestAccessibility() }
                         .buttonStyle(.borderedProminent)
-                    Button("Open Settings") { model.openSettings(.accessibility) }
+                    settingsButton(.accessibility)
                 }
             },
             detail: {
                 if !granted && model.runningFromTerminal {
-                    Text("Running from a terminal: grant it to your terminal app. It takes effect at once.")
-                } else if !granted {
-                    Text("Takes effect at once, no relaunch.")
+                    Text("Grant it to your terminal app.")
                 }
             }
         )
     }
 
+    /// "Open Settings". Secondary (default): text only, so each row has one button that reads as
+    /// a button. `prominent`: a plain button, for a row where it is the only action.
     @ViewBuilder
-    private var relaunchButton: some View {
-        if !model.runningFromTerminal {
-            Button {
-                model.relaunch()
-            } label: {
-                Label("Relaunch app", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.borderedProminent)
+    private func settingsButton(_ pane: AppModel.SettingsPane, prominent: Bool = false) -> some View {
+        let button = Button("Open Settings") { model.openSettings(pane) }
+        if prominent {
+            button
+        } else {
+            button
+                .buttonStyle(.borderless)
+                .help("Open this pane in System Settings")
         }
+    }
+
+    private var relaunchButton: some View {
+        Button {
+            model.relaunch()
+        } label: {
+            Label("Relaunch app", systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(.borderedProminent)
     }
 
     @ViewBuilder
@@ -161,7 +165,7 @@ struct PermissionsCard: View {
         if #available(macOS 15, *), !model.permissions.allGranted {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "info.circle")
-                Text("macOS may also ask whether the app may bypass the private window picker. Click **Allow**, or the first key presses go to that dialog.")
+                Text("If macOS asks to bypass the private window picker, click **Allow**.")
                     .fixedSize(horizontal: false, vertical: true)
             }
             .font(.caption)
@@ -171,12 +175,23 @@ struct PermissionsCard: View {
     }
 }
 
-/// One permission: icon, name, reason, status pill, buttons, optional detail line.
-private struct PermissionRow<Pill: View, Actions: View, Detail: View>: View {
+/// Quiet mark for a granted permission, in place of the buttons.
+private struct GrantedCheck: View {
+    var body: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .font(.title3)
+            .foregroundStyle(.green)
+            .help("Allowed")
+            .accessibilityLabel("Allowed")
+    }
+}
+
+/// One permission: icon, name + optional status pill, reason, optional detail line; buttons on the right.
+private struct PermissionRow<Actions: View, Detail: View>: View {
     let symbol: String
     let name: String
     let reason: String
-    @ViewBuilder let pill: Pill
+    var pill: StatusPill? = nil
     @ViewBuilder let actions: Actions
     @ViewBuilder let detail: Detail
 
@@ -187,22 +202,24 @@ private struct PermissionRow<Pill: View, Actions: View, Detail: View>: View {
                 .foregroundStyle(Theme.accent)
                 .frame(width: 34, height: 34)
                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.accent.opacity(0.12)))
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(name).font(.body.weight(.semibold))
-                    pill
-                    Spacer(minLength: 0)
+                    if let pill { pill }
                 }
                 Text(reason)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                HStack(spacing: 8) { actions }
-                    .controlSize(.regular)
                 detail
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
             }
+            Spacer(minLength: 8)
+            HStack(spacing: 8) { actions }
+                .controlSize(.regular)
+                .fixedSize()
         }
     }
 }

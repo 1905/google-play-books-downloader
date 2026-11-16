@@ -80,11 +80,16 @@ public struct Settings: Equatable {
     /// Run name from the text field. Trims whitespace, replaces "/" and ":" (they would make
     /// nested or odd cache dirs) with "-". Empty, "." or ".." → `CachePaths.defaultRunName(date:)`.
     public static func runName(from text: String, date: Date) -> String {
+        customRunName(from: text) ?? CachePaths.defaultRunName(date: date)
+    }
+
+    /// The name the user typed, cleaned as `runName(from:date:)` does; nil when the field gives
+    /// the date-time default.
+    public static func customRunName(from text: String) -> String? {
         let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
-        if s.isEmpty || s == "." || s == ".." { return CachePaths.defaultRunName(date: date) }
-        return s
+        return s.isEmpty || s == "." || s == ".." ? nil : s
     }
 }
 
@@ -95,7 +100,7 @@ extension StopReason {
         case .endOfDocument: return "reached the end (page stopped changing)"
         case .capReached: return "hit the page cap"
         case .cancelled: return "stopped with ESC"
-        case .captureFailed(let m): return "capture failed: \(m)"
+        case .captureFailed(let m, _): return "capture failed: \(m)"
         }
     }
 

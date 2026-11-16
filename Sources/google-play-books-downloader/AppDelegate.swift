@@ -170,7 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             autostartExitCode = code
             let model = makeMainWindow()
             model.headless = true
-            model.showReview(result: result, cacheDir: outcome.cacheDir, duration: Date().timeIntervalSince(started))
+            model.showReview(result: result, cacheDir: outcome.cacheDir, duration: Date().timeIntervalSince(started),
+                             named: options.runName != nil)
             return
         }
         if code == ExitCode.captureFailed && result.pages.isEmpty {
@@ -273,8 +274,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = MainWindowController(model: model)
         // One window: closing it quits (in --autostart mode with the run's exit code).
         controller.onClose = { NSApp.terminate(nil) }
-        model.onStart = { [weak self] window, config, key, runName in
-            self?.startCapture(window: window, config: config, key: key, runName: runName)
+        model.onStart = { [weak self] window, config, key, runName, named in
+            self?.startCapture(window: window, config: config, key: key, runName: runName, named: named)
         }
         model.onStop = { [weak self] in
             Log.write("Stop clicked, stopping")
@@ -301,8 +302,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Same `runSession` path as the CLI. Main window hidden and the HUD shown during the run,
     /// review after it.
     @MainActor
-    private func startCapture(window: SCWindow, config: SessionConfig, key: NextKey, runName: String) {
-        guard session == nil, let model else { return }
+    private func startCapture(window: SCWindow, config: SessionConfig, key: NextKey, runName: String, named: Bool) {
+        // `beginCapture` sets `.capturing` before the Task below, so a second call is refused at once.
+        guard session == nil, let model, model.stage != .capturing else { return }
         Log.write("start: \(window.owningApplication?.applicationName ?? "?") — \(window.title ?? ""), run \(runName), key \(key.rawValue), latency \(config.extraLatency) s, split \(config.splitSpreads), maxPages \(config.maxPages)")
         model.beginCapture(target: window.frame)
         let hud = CaptureHUDController(model: model)
@@ -319,7 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Log.write("stopped: \(outcome.result.reason), \(outcome.result.pages.count) pages in \(outcome.cacheDir.path)")
                 self.closeHUD()
                 model.showReview(result: outcome.result, cacheDir: outcome.cacheDir,
-                                 duration: Date().timeIntervalSince(started))
+                                 duration: Date().timeIntervalSince(started), named: named)
             } catch {
                 Log.write("cannot start: \(error)")
                 self.closeHUD()
@@ -339,6 +341,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag, let model, model.stage != .capturing { mainWindow?.show() }
         return true
+    }
+
+    /// Quit (Cmd+Q, or the main window closed) during a PDF export waits for the export to end,
+    /// so no `.partial-<uuid>.pdf` stays in the destination folder.
+    @MainActor
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model, model.review?.saving == true else { return .terminateNow }
+        Log.write("quit requested during PDF export, quitting when the export ends")
+        model.onSaveFinished = { NSApp.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
     }
 
     /// `--autostart` without `--save-pdf` exits with the run's code (6 if the capture failed).

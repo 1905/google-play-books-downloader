@@ -68,7 +68,12 @@ struct ReviewState {
     /// Pages much shorter than the run's median page (see `PageCheck`), filled in after the run.
     var incomplete: Set<URL> = []
 
-    init(pages: [URL], reason: StopReason, cacheDir: URL, duration: TimeInterval) {
+    /// The run name when the user typed one (with any suffix `uniqueRunDirectory` added);
+    /// nil for the date-time default.
+    let customName: String?
+
+    /// `named`: the user typed the run name (else it is the date-time default).
+    init(pages: [URL], reason: StopReason, cacheDir: URL, duration: TimeInterval, named: Bool) {
         self.pages = pages
         var n: [URL: Int] = [:]
         for (i, u) in pages.enumerated() { n[u] = i + 1 }
@@ -76,6 +81,7 @@ struct ReviewState {
         self.reason = reason
         self.cacheDir = cacheDir
         self.duration = duration
+        customName = named ? cacheDir.lastPathComponent : nil
     }
 
     var runName: String { cacheDir.lastPathComponent }
@@ -112,7 +118,7 @@ final class AppModel {
     /// The permissions card is expanded although everything is granted.
     var permissionsExpanded = false
     /// No app bundle: macOS ties the grants to the terminal app that started the binary.
-    let runningFromTerminal = Bundle.main.bundleIdentifier == nil
+    let runningFromTerminal: Bool
 
     // MARK: Source window
 
@@ -122,12 +128,16 @@ final class AppModel {
     var windowList: [SourceWindow] = []
     var windowListError: String?
     var testKeyMessage: String?
+    /// The capture options under the window card are open.
+    var optionsExpanded = false
 
     // MARK: Capture / review
 
     var progress = CaptureProgress()
     var lastPageThumb: NSImage?
     var review: ReviewState?
+    /// Page the review grid scrolls to next (set by "Select incomplete"), cleared after the scroll.
+    var reviewScrollTarget: URL?
     var alert: AlertItem?
     /// `--autostart` review: no "New capture" (closing the window quits with the run's exit code).
     var headless = false
@@ -141,15 +151,26 @@ final class AppModel {
     // MARK: Hooks set by AppDelegate / MainWindowController
 
     var onStageChange: ((Stage) -> Void)?
-    /// Starts a run on the window (already re-fetched by the caller).
-    var onStart: ((SCWindow, SessionConfig, NextKey, String) -> Void)?
+    /// Starts a run on the window (already re-fetched by the caller). The Bool: the user typed
+    /// the run name.
+    var onStart: ((SCWindow, SessionConfig, NextKey, String, Bool) -> Void)?
     var onStop: (() -> Void)?
+    /// Called once when the running PDF export ends (saved or failed); AppDelegate sets it to
+    /// finish a quit that waits for the export.
+    @ObservationIgnored var onSaveFinished: (() -> Void)?
     /// Main window, for sheets and hiding it during the click picker.
     weak var window: NSWindow?
 
+    #if DEBUG
+    /// `--ui-snapshots` only: replaces the ScreenCaptureKit window list.
+    @ObservationIgnored var mockWindowList: (() async -> [SourceWindow])?
+    #endif
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    /// A Start is between the click and `onStart`: a second Return must not start a second run.
+    @ObservationIgnored private var isStarting = false
 
-    init() {
+    init(runningFromTerminal: Bool = Bundle.main.bundleIdentifier == nil) {
+        self.runningFromTerminal = runningFromTerminal
         refreshPermissions()
     }
 
@@ -250,6 +271,13 @@ final class AppModel {
     }
 
     func loadWindowList() async {
+        #if DEBUG
+        if let mockWindowList {
+            windowList = await mockWindowList()
+            windowListError = nil
+            return
+        }
+        #endif
         guard permissions.screen == .granted else {   // SCShareableContent can show the prompt
             windowList = []
             windowListError = "Allow Screen Recording to list windows."
@@ -336,14 +364,14 @@ final class AppModel {
     var startBlocker: String? {
         switch permissions.screen {
         case .needed: return "Allow Screen Recording first."
-        case .needsRelaunch: return "Relaunch the app to use Screen Recording."
+        case .needsRelaunch: return "Relaunch to use Screen Recording."
         case .granted: break
         }
         if !permissions.accessibility { return "Allow Accessibility first." }
-        guard source != nil else { return "Choose the Google Play Books window first." }
+        guard source != nil else { return "Choose the Play Books window first." }
         switch sourceHealth {
-        case .gone: return "The window was closed. Choose it again."
-        case .offScreen: return "The window is minimized or on another Space. Show it first."
+        case .gone: return "Window closed. Choose it again."
+        case .offScreen: return "Window hidden. Show it first."
         case .ok: return nil
         }
     }
@@ -351,8 +379,10 @@ final class AppModel {
     func start() {
         // End editing first, so a name still in the field editor lands in `runNameText`.
         window?.makeFirstResponder(nil)
-        guard startBlocker == nil, let s = source else { return }
-        let runName = Settings.runName(from: runNameText, date: Date())
+        guard !isStarting, stage == .setup, startBlocker == nil, let s = source else { return }
+        isStarting = true
+        let customName = Settings.customRunName(from: runNameText)
+        let runName = customName ?? CachePaths.defaultRunName(date: Date())
         var current = settings
         current.splitSpreads = true   // Play Books two-page view; no UI switch any more
         current.save(to: .standard)   // what runs is what's stored
@@ -360,12 +390,13 @@ final class AppModel {
         let key = current.nextKey
         Log.write("start requested: window \"\(s.title)\" (\(s.appName)), run name \"\(runName)\" (field \"\(runNameText)\"), \(Self.describe(current))")
         Task { @MainActor in
+            defer { isStarting = false }
             // The SCWindow frame is a snapshot and the window may have moved: re-fetch it.
             guard let fresh = try? await WindowPicker.window(id: s.id) else {
                 sourceHealth = .gone
                 return
             }
-            onStart?(fresh, config, key, runName)
+            onStart?(fresh, config, key, runName, customName != nil)
         }
     }
 
@@ -411,8 +442,9 @@ final class AppModel {
 
     // MARK: Review
 
-    func showReview(result: SessionResult, cacheDir: URL, duration: TimeInterval) {
-        review = ReviewState(pages: result.pages, reason: result.reason, cacheDir: cacheDir, duration: duration)
+    func showReview(result: SessionResult, cacheDir: URL, duration: TimeInterval, named: Bool) {
+        review = ReviewState(pages: result.pages, reason: result.reason, cacheDir: cacheDir,
+                             duration: duration, named: named)
         stage = .review
         let pages = result.pages
         Task {
@@ -432,6 +464,7 @@ final class AppModel {
         guard !pages.isEmpty else { return }
         review?.selection = Set(pages)
         review?.anchor = pages.first
+        reviewScrollTarget = pages.first
     }
 
     /// Click on a page. ⌘ toggles, ⇧ extends from the anchor, plain click selects only it.
@@ -502,6 +535,10 @@ final class AppModel {
                 alert = AlertItem(title: "Could not save the PDF",
                                   message: "\(error)\n\nThe cached images are kept in \(review?.cacheDir.path ?? "the cache").")
             }
+            if let done = onSaveFinished {
+                onSaveFinished = nil
+                done()
+            }
         }
     }
 
@@ -510,8 +547,9 @@ final class AppModel {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    /// Moves the run's cache folder to the Trash. Without a saved PDF the view asks first.
     func trashCache() {
-        guard let r = review, r.savedPDF != nil, !r.locked else { return }
+        guard let r = review, !r.locked else { return }
         do {
             try FileManager.default.trashItem(at: r.cacheDir, resultingItemURL: nil)
             review?.cacheTrashed = true

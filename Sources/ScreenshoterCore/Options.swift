@@ -21,7 +21,8 @@ public struct SessionConfig: Equatable {
     public var extraLatency: Double = 0.5
     public var maxPages: Int = 500
     /// Split 2-up spreads into two pages. The first shot (front cover) is never split, and a
-    /// split last shot (back cover) is merged back at the end of the document.
+    /// split last shot (back cover) is merged back at the end of the document, unless the
+    /// splitter found a gutter (then it is a real two-page spread and stays split).
     public var splitSpreads = true
     public var pollInterval: Double = 0.15
     public var changeTimeout: Double = 10

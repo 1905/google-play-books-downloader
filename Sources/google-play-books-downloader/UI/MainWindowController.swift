@@ -13,6 +13,16 @@ enum Theme {
     static let setupMinSize = NSSize(width: 820, height: 480)
     static let reviewSize = NSSize(width: 900, height: 700)
     static let reviewMinSize = NSSize(width: 620, height: 460)
+    /// Setup content column: one task, read top to bottom.
+    static let setupColumn: CGFloat = 620
+
+    /// Surface under page thumbnails: a light neutral grey in light mode (the system
+    /// under-page grey is heavy there), the system under-page colour in dark mode.
+    static let pageSurface = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? .underPageBackgroundColor
+            : NSColor(white: 0.915, alpha: 1)
+    })
 }
 
 /// Rounded grouped card: control background, hairline border, soft shadow. Works in light and dark.

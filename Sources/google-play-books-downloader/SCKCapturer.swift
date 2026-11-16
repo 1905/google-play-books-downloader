@@ -2,19 +2,46 @@ import CoreGraphics
 import ScreenCaptureKit
 import ScreenshoterCore
 
+enum CapturerError: CaptureFailureKind, CustomStringConvertible {
+    case windowClosed, windowOffScreen, windowResized(from: CGSize, to: CGSize)
+
+    var failureKind: FailureKind {
+        switch self {
+        case .windowClosed: return .windowClosed
+        case .windowOffScreen: return .windowOffScreen
+        case .windowResized: return .windowResized
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .windowClosed: return "the picked window was closed"
+        case .windowOffScreen: return "the picked window was minimized or moved to another Space"
+        case .windowResized(let a, let b):
+            return "the picked window was resized (\(Int(a.width))×\(Int(a.height)) → \(Int(b.width))×\(Int(b.height)) pt) — start a new capture"
+        }
+    }
+}
+
 /// Captures one window via ScreenCaptureKit, independent of what covers it.
 ///
 /// Sizes are fixed at init from the window frame: full = frame × scale (rounded),
 /// preview = `SessionConfig.previewSize` — the same helper CaptureSession uses, so the
-/// preview it gets is exactly the size it expects.
+/// preview it gets is exactly the size it expects. A window resized, closed or hidden mid-run
+/// fails the next full capture (a move is fine: window capture follows the window).
 final class SCKCapturer: WindowCapturer {
     let fullWidth: Int, fullHeight: Int
     let previewWidth: Int, previewHeight: Int
     private let filter: SCContentFilter
     private let fullConfig: SCStreamConfiguration
     private let previewConfig: SCStreamConfiguration
+    private let windowID: CGWindowID
+    /// Window size at init, global CG points (SCWindow.frame and the CG window list use the same space).
+    private let startSize: CGSize
 
     init(window: SCWindow, scale: CGFloat, config: SessionConfig = SessionConfig()) {
+        windowID = window.windowID
+        startSize = window.frame.size
         filter = SCContentFilter(desktopIndependentWindow: window)
         fullWidth = max(Int((window.frame.width * scale).rounded()), 1)
         fullHeight = max(Int((window.frame.height * scale).rounded()), 1)
@@ -23,8 +50,23 @@ final class SCKCapturer: WindowCapturer {
         previewConfig = Self.streamConfig(previewWidth, previewHeight)
     }
 
+    /// Checks the window first (one CG window-list lookup); previews skip the check, they are
+    /// polled every ~100 ms and a full shot follows every page.
     func captureFull() async throws -> CGImage {
-        try await capture(fullConfig)
+        try checkWindow()
+        return try await capture(fullConfig)
+    }
+
+    private func checkWindow() throws {
+        switch WindowPicker.state(of: windowID) {
+        case .gone: throw CapturerError.windowClosed
+        case .offScreen: throw CapturerError.windowOffScreen
+        case .onScreen(let frame):
+            let tol: CGFloat = 2
+            if abs(frame.width - startSize.width) > tol || abs(frame.height - startSize.height) > tol {
+                throw CapturerError.windowResized(from: startSize, to: frame.size)
+            }
+        }
     }
 
     func capturePreview() async throws -> CGImage {

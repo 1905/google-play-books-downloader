@@ -8,7 +8,6 @@ struct SourceCard: View {
     var body: some View {
         Card(tint: model.source != nil && model.sourceHealth == .gone ? .red : nil) {
             VStack(alignment: .leading, spacing: 14) {
-                CardHeader(title: "Google Play Books window", symbol: "macwindow")
                 if let source = model.source {
                     picked(source)
                 } else {
@@ -18,69 +17,59 @@ struct SourceCard: View {
         }
         .animation(.easeInOut(duration: 0.2), value: model.source?.id)
         .animation(.easeInOut(duration: 0.2), value: model.sourceHealth)
+        .animation(.easeInOut(duration: 0.2), value: model.optionsExpanded)
     }
 
     // MARK: Empty
 
     private var empty: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "macwindow.on.rectangle")
-                .font(.system(size: 30, weight: .light))
-                .foregroundStyle(Theme.accent)
+        let allowed = model.permissions.screen == .granted
+        return VStack(spacing: allowed ? 12 : 8) {
+            if allowed {
+                Image(systemName: "macwindow.on.rectangle")
+                    .font(.system(size: 30, weight: .light))
+                    .foregroundStyle(Theme.accent)
+            }
             VStack(spacing: 4) {
                 Text("Choose the Google Play Books window")
                     .font(.title3.weight(.semibold))
-                Text("Open the book in Google Play Books (browser), two-page view, at the cover.")
+                Text(allowed ? "Open the book in your browser, two-page view, at the cover."
+                             : "Allow Screen Recording first to choose a window.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 10) {
-                Button {
-                    model.pickByClick()
-                } label: {
-                    Label("Click a window…", systemImage: "cursorarrow.click")
+            if allowed {
+                HStack(spacing: 10) {
+                    Button {
+                        model.pickByClick()
+                    } label: {
+                        Label("Click a window…", systemImage: "cursorarrow.click")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button {
+                        showList = true
+                    } label: {
+                        Label("Choose from list", systemImage: "list.bullet")
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                listButton(title: "Choose from list", symbol: "list.bullet")
-            }
-            .disabled(model.permissions.screen != .granted)
-            if model.permissions.screen != .granted {
-                Label("Allow Screen Recording first to choose a window.", systemImage: "lock")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .modifier(WindowListPopover(model: model, isPresented: $showList))
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 18)
-        .padding(.horizontal, 12)
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
-                .foregroundStyle(Theme.accent.opacity(0.45))
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.accent.opacity(0.04)))
-        }
-    }
-
-    private func listButton(title: String, symbol: String) -> some View {
-        Button {
-            showList = true
-        } label: {
-            Label(title, systemImage: symbol)
-        }
-        .popover(isPresented: $showList, arrowEdge: .bottom) {
-            WindowListView(model: model) { candidate in
-                showList = false
-                model.pick(from: candidate)
-            }
-        }
+        .padding(.vertical, allowed ? 18 : 6)
     }
 
     // MARK: Picked
 
     private func picked(_ s: SourceWindow) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            preview(s)
+            // Nothing to preview without Screen Recording or once the window is gone: the row
+            // below names the window and the banner says what happened.
+            if model.permissions.screen == .granted && model.sourceHealth != .gone {
+                preview(s)
+            }
             HStack(alignment: .top, spacing: 12) {
                 AppIcon(image: s.appIcon, size: 40)
                 VStack(alignment: .leading, spacing: 3) {
@@ -95,74 +84,65 @@ struct SourceCard: View {
                         .lineLimit(2)
                         .truncationMode(.middle)
                         .help(s.title)
-                    Text("\(Int(s.frame.width.rounded())) × \(Int(s.frame.height.rounded())) pt")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.tertiary)
                 }
                 Spacer(minLength: 8)
                 HStack(spacing: 6) {
                     Button("Show") { model.showSource() }
                         .help("Bring the window to the front")
                         .disabled(model.sourceHealth == .gone)
-                    listButton(title: "Change", symbol: "arrow.triangle.2.circlepath")
-                        .labelStyle(.titleOnly)
-                        .help("Choose another window from the list")
-                    Button { model.pickByClick() } label: { Image(systemName: "cursorarrow.click") }
-                        .help("Click a different window")
+                    Menu("Change") {
+                        Button("Click a window…") { model.pickByClick() }
+                        Button("Choose from list…") { showList = true }
+                    }
+                    .menuIndicator(.visible)
+                    .fixedSize()
+                    .help("Choose a different window")
                 }
                 .fixedSize()
+                .modifier(WindowListPopover(model: model, isPresented: $showList))
             }
             healthBanner
         }
     }
 
-    /// Live 16:10 thumbnail; app icon + hint without Screen Recording; red when gone.
+    /// Live thumbnail straight in the card, with a soft corner radius and a "Live" badge.
+    /// Only shown with Screen Recording and while the window exists.
+    @ViewBuilder
     private func preview(_ s: SourceWindow) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .underPageBackgroundColor))
-            if model.sourceHealth == .gone {
-                VStack(spacing: 8) {
-                    Image(systemName: "xmark.rectangle")
-                        .font(.system(size: 30, weight: .light))
-                    Text("Window closed")
-                        .font(.headline)
-                }
-                .foregroundStyle(.red)
-            } else if let thumb = model.sourceThumbnail, model.permissions.screen == .granted {
+        Group {
+            if let thumb = model.sourceThumbnail {
                 Image(decorative: thumb, scale: 1)
                     .resizable()
                     .interpolation(.high)
                     .aspectRatio(contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
-                    .padding(10)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    }
+                    .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+                    .overlay(alignment: .topTrailing) {
+                        if model.sourceHealth == .ok {
+                            Label("Live", systemImage: "dot.radiowaves.left.and.right")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(.ultraThinMaterial))
+                                .padding(8)
+                                .help("Refreshed every 2 seconds")
+                        }
+                    }
                     .transition(.opacity)
-            } else if model.permissions.screen != .granted {
-                VStack(spacing: 10) {
-                    AppIcon(image: s.appIcon, size: 56)
-                    Text("Allow Screen Recording to see a preview")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
             } else {
-                ProgressView().controlSize(.small)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Theme.pageSurface)
+                    .aspectRatio(16 / 10, contentMode: .fit)
+                    .overlay(ProgressView().controlSize(.small))
             }
         }
-        .aspectRatio(16 / 10, contentMode: .fit)
-        .frame(maxHeight: 220)
+        // Smaller while the options are open, so the column still fits the window.
+        .frame(maxHeight: model.optionsExpanded ? 150 : 240)
         .frame(maxWidth: .infinity)
-        .overlay(alignment: .topTrailing) {
-            if model.sourceHealth == .ok, model.sourceThumbnail != nil, model.permissions.screen == .granted {
-                Label("Live", systemImage: "dot.radiowaves.left.and.right")
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(.ultraThinMaterial))
-                    .padding(8)
-                    .help("Refreshed every 2 seconds")
-            }
-        }
     }
 
     @ViewBuilder
@@ -173,7 +153,7 @@ struct SourceCard: View {
         case .gone:
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                Text("Window closed — choose again.")
+                Text("Window closed.")
                     .font(.callout.weight(.medium))
                 Spacer()
                 Button("Choose again") { model.pickByClick() }
@@ -182,12 +162,27 @@ struct SourceCard: View {
         case .offScreen:
             HStack(spacing: 8) {
                 Image(systemName: "eye.slash")
+                // "Show" sits in the row above.
                 Text("The window is minimized or on another Space.")
                     .font(.callout)
                 Spacer()
-                Button("Show") { model.showSource() }
             }
             .foregroundStyle(.orange)
+        }
+    }
+}
+
+/// "Choose from list" popover, anchored to the view it modifies.
+private struct WindowListPopover: ViewModifier {
+    @Bindable var model: AppModel
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        content.popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            WindowListView(model: model) { candidate in
+                isPresented = false
+                model.pick(from: candidate)
+            }
         }
     }
 }
@@ -225,7 +220,7 @@ struct AppIcon: View {
 }
 
 /// Popover list of on-screen windows: app icon, app name, window title.
-private struct WindowListView: View {
+struct WindowListView: View {
     @Bindable var model: AppModel
     let onPick: (SourceWindow) -> Void
     @State private var loading = true
