@@ -245,6 +245,7 @@ private final class Snapshotter {
         }
 
         try writeDialogs()
+        try? FileManager.default.removeItem(at: mock.dir)   // the mock page JPEGs
         print("ui-snapshots: \(count) states, \(count * 2) PNG files + dialogs.txt in \(out.path)")
     }
 
