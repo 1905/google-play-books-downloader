@@ -117,9 +117,10 @@ public final class DiskPageSink: PageSink {
         let url = pageURL(first)
         let oldCount = count
         let temp = directory.appendingPathComponent(".replace-\(UUID().uuidString).jpg")
-        try write(image, to: temp)
         var moved: [(from: URL, to: URL)] = []
         do {
+            // Inside the do: a failed write can leave a partial temp file, and the catch removes it.
+            try write(image, to: temp)
             moved = try setAside(from: first + 1)
             guard rename(temp.path, url.path) == 0 else { throw PageSinkError.notWritable(url) }
         } catch {
